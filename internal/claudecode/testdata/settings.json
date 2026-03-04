@@ -1,0 +1,10 @@
+{
+  "model": "opus",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "example-skills@anthropic-agent-skills": true
+  },
+  "permissions": {
+    "allow": ["Bash(go test:*)"]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "numStartups": 705,
+  "projects": {
+    "/Users/test/project": {
+      "hasTrustDialogAccepted": true
+    }
+  },
+  "mcpServers": {
+    "datadog": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-datadog@latest"],
+      "env": {
+        "DATADOG_API_KEY": "secret123",
+        "DATADOG_SITE": "us5.datadoghq.com"
+      }
+    }
+  }
+}
