@@ -2,6 +2,22 @@
 
 A unified CLI for inspecting your Claude Code installation — MCP servers, skills, rules, projects, and metadata.
 
+## Why ccli?
+
+Claude Code stores its configuration across many files and directories — global settings, project configs, MCP server definitions, skills, rules, session history, and more. There's no built-in way to get a unified view of what's configured, where it lives, or how it all fits together.
+
+**ccli** gives you that visibility in a single command-line tool:
+
+- **See everything at a glance** — `ccli info` shows your full setup: version, auth, model, paths, session counts, and storage usage.
+- **Audit MCP servers** — List servers across all scopes, inspect their config, and verify environment variables without digging through JSON files.
+- **Discover skills and rules** — Find what's available across personal, project, and plugin sources in one place.
+- **Track project usage** — View per-project costs, token usage, and model breakdowns from session history.
+- **Scriptable output** — Every command supports `--format json` and `--format yaml` for automation and piping.
+
+All of this works offline by reading config files directly — no network calls, no dependency on the `claude` binary (except for version/auth detection).
+
+Looking ahead, ccli is designed to grow beyond Claude Code. As the ecosystem of AI coding agents expands — Cursor, Windsurf, Codex, and others — each brings its own configuration formats, MCP setups, and project conventions. ccli aims to become a single pane of glass for inspecting and managing configuration across multiple agents, so you can understand your full AI-assisted development setup regardless of which tools you use.
+
 ## Installation
 
 ### Homebrew
