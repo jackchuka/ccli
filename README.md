@@ -12,6 +12,7 @@ Claude Code stores its configuration across many files and directories — globa
 - **Audit MCP servers** — List servers across all scopes, inspect their config, and verify environment variables without digging through JSON files.
 - **Discover skills and rules** — Find what's available across personal, project, and plugin sources in one place.
 - **Track project usage** — View per-project costs, token usage, and model breakdowns from session history.
+- **Clean up old sessions** — Delete old session data and associated artifacts (debug logs, telemetry, todos, tasks) across all or specific projects.
 - **Scriptable output** — Every command supports `--format json` and `--format yaml` for automation and piping.
 
 All of this works offline by reading config files directly — no network calls, no dependency on the `claude` binary (except for version/auth detection).
@@ -88,6 +89,21 @@ ccli projects get my-project
 
 Displays per-project cost, token usage (input/output), line changes, session count, and per-model cost breakdown.
 
+### Cleaning up sessions
+
+```bash
+# Delete sessions older than 30 days across all projects
+ccli projects clean --older-than 30d
+
+# Preview what would be deleted
+ccli projects clean --older-than 30d --dry-run
+
+# Clean a specific project
+ccli projects clean my-project --older-than 7d
+```
+
+Removes old session logs and associated artifacts (debug logs, telemetry, todos, tasks, file history, session environment) matched by session UUID.
+
 ### Output formats
 
 All commands support `--format` for machine-readable output:
@@ -121,6 +137,12 @@ ccli reads Claude Code configuration files directly from disk:
 | `~/.claude/rules/`         | Global rules                         |
 | `.claude/rules/`           | Project-scoped rules                 |
 | `~/.claude/projects/`      | Project session data                 |
+| `~/.claude/debug/`         | Debug logs (per session)             |
+| `~/.claude/telemetry/`     | Telemetry events (per session)       |
+| `~/.claude/todos/`         | Agent todo tracking (per session)    |
+| `~/.claude/tasks/`         | Task records (per session)           |
+| `~/.claude/file-history/`  | File edit history (per session)      |
+| `~/.claude/session-env/`   | Session environment (per session)    |
 
 All resources are categorized by scope — global, project, personal, or plugin — shown with colored bullets in text output.
 

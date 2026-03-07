@@ -127,6 +127,19 @@ Research on what configuration files and metadata AI coding agents store locally
 - Gemini checkpointing state
 - Cursor global user rules (locked in `state.vscdb`)
 
+## Session Cleanup
+
+| Agent | Built-in Cleanup | Storage Location | Notes |
+|---|---|---|---|
+| **Claude Code** | None (manual `rm` only) | `~/.claude/projects/`, `~/.claude/debug/`, `~/.claude/telemetry/`, `~/.claude/todos/`, `~/.claude/tasks/`, `~/.claude/file-history/`, `~/.claude/session-env/` | ccli fills this gap with `projects clean --older-than` |
+| **Codex CLI** | None; `/new` clears current, `/compact` compresses | `~/.codex/sessions/`, `~/.codex/state_5.sqlite` | Open feature request for retention policy (issue #6015) |
+| **Gemini CLI** | Native retention policy | `~/.gemini/tmp/<project_hash>/chats/` | `settings.json` supports `sessionRetention.maxAge` and `maxCount`; also `--delete-session` flag |
+| **Cursor** | None | `~/Library/Application Support/Cursor/`, `~/.config/Cursor/CachedData/` | CachedData accumulates per-version directories indefinitely; manual deletion only |
+| **Copilot CLI** | `/cleanup` requested but not implemented | `~/.copilot/session-state/<uuid>/` | Open feature request (issue #1451); `gh copilot chat delete` for chat history only |
+| **Windsurf** | None | Internal Cascade memories | Opaque storage; no CLI access |
+| **Aider** | `/clear` (current session only) | `.aider.chat.history.md`, `.aider.tags.cache.v4` in working dir | Manual `rm` for old files; per-project, not centralized |
+| **Amazon Q** | `/clear` (current session only) | `~/.aws/amazonq/history/` | Timestamped JSON files; manual deletion for old sessions |
+
 ## Universal Concepts for ccli
 
 These concepts exist across all agents and map to `ccli` commands:
@@ -140,4 +153,5 @@ These concepts exist across all agents and map to `ccli` commands:
 | Info/version | `ccli info` | All |
 | Model | Part of `ccli info` | All |
 | Permissions | Future | Claude, Codex, Cursor, Copilot, Amazon Q |
+| Session cleanup | `ccli projects clean` | Claude (built-in); Codex, Copilot, Cursor (manual only); Gemini (native retention); Aider, Amazon Q (manual) |
 | Session history | Future (v2) | Claude, Codex, Copilot, Aider, Amazon Q |
