@@ -213,6 +213,162 @@ func TestCleanProjects_SpecificProject(t *testing.T) {
 	}
 }
 
+func TestCleanProjects_RemovesConfigEntry(t *testing.T) {
+	tmp := t.TempDir()
+
+	projEncoded := encodeTestPath("/Users/test/projA")
+	projDir := filepath.Join(tmp, "projects", projEncoded)
+
+	oldFile := filepath.Join(projDir, "aaaa-bbbb-cccc-dddd.jsonl")
+	writeFile(t, oldFile, `{"msg":"old"}`)
+
+	cfg := map[string]any{
+		"numStartups": 5,
+		"projects": map[string]any{
+			"/Users/test/projA": map[string]any{
+				"hasTrustDialogAccepted": true,
+			},
+			"/Users/test/projB": map[string]any{
+				"hasTrustDialogAccepted": true,
+			},
+		},
+	}
+	cfgPath := filepath.Join(tmp, "claude.json")
+	cfgData, err := json.Marshal(cfg)
+	must(t, err)
+	must(t, os.WriteFile(cfgPath, cfgData, 0o644))
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		ConfigFile: cfgPath,
+		HomeDir:    tmp,
+	})
+
+	// Clean all sessions for projA (no OlderThan) — should remove config entry
+	result, err := a.CleanProjects(claudecode.CleanOptions{
+		Project: "projA",
+		DryRun:  false,
+	})
+	if err != nil {
+		t.Fatalf("CleanProjects: %v", err)
+	}
+	if !result.ConfigRemoved {
+		t.Error("expected ConfigRemoved to be true")
+	}
+
+	// Verify projA is gone from config, projB remains
+	updated, err := claudecode.LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if _, ok := updated.Projects["/Users/test/projA"]; ok {
+		t.Error("projA should be removed from config")
+	}
+	if _, ok := updated.Projects["/Users/test/projB"]; !ok {
+		t.Error("projB should still be in config")
+	}
+}
+
+func TestCleanProjects_KeepsConfigWithOlderThan(t *testing.T) {
+	tmp := t.TempDir()
+
+	projEncoded := encodeTestPath("/Users/test/projA")
+	projDir := filepath.Join(tmp, "projects", projEncoded)
+
+	oldFile := filepath.Join(projDir, "aaaa-bbbb-cccc-dddd.jsonl")
+	writeFile(t, oldFile, `{"msg":"old"}`)
+	setModTime(t, oldFile, time.Now().Add(-60*24*time.Hour))
+
+	cfg := map[string]any{
+		"projects": map[string]any{
+			"/Users/test/projA": map[string]any{
+				"hasTrustDialogAccepted": true,
+			},
+		},
+	}
+	cfgPath := filepath.Join(tmp, "claude.json")
+	cfgData, err := json.Marshal(cfg)
+	must(t, err)
+	must(t, os.WriteFile(cfgPath, cfgData, 0o644))
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		ConfigFile: cfgPath,
+		HomeDir:    tmp,
+	})
+
+	// Clean with --older-than — should NOT remove config entry
+	result, err := a.CleanProjects(claudecode.CleanOptions{
+		Project:   "projA",
+		OlderThan: 30 * 24 * time.Hour,
+		DryRun:    false,
+	})
+	if err != nil {
+		t.Fatalf("CleanProjects: %v", err)
+	}
+	if result.ConfigRemoved {
+		t.Error("expected ConfigRemoved to be false when using OlderThan")
+	}
+
+	updated, err := claudecode.LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if _, ok := updated.Projects["/Users/test/projA"]; !ok {
+		t.Error("projA should still be in config when using --older-than")
+	}
+}
+
+func TestCleanProjects_AllSessionsForProject(t *testing.T) {
+	tmp := t.TempDir()
+
+	projEncoded := encodeTestPath("/Users/test/projA")
+	projDir := filepath.Join(tmp, "projects", projEncoded)
+
+	// One old session and one new session — both should be cleaned
+	oldUUID := "aaaa-bbbb-cccc-dddd"
+	newUUID := "eeee-ffff-1111-2222"
+
+	oldFile := filepath.Join(projDir, oldUUID+".jsonl")
+	writeFile(t, oldFile, `{"msg":"old"}`)
+	setModTime(t, oldFile, time.Now().Add(-60*24*time.Hour))
+
+	newFile := filepath.Join(projDir, newUUID+".jsonl")
+	writeFile(t, newFile, `{"msg":"new"}`)
+
+	cfg := map[string]interface{}{
+		"projects": map[string]interface{}{
+			"/Users/test/projA": map[string]interface{}{
+				"hasTrustDialogAccepted": true,
+			},
+		},
+	}
+	cfgPath := filepath.Join(tmp, "claude.json")
+	cfgData, err := json.Marshal(cfg)
+	must(t, err)
+	must(t, os.WriteFile(cfgPath, cfgData, 0o644))
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		ConfigFile: cfgPath,
+		HomeDir:    tmp,
+	})
+	result, err := a.CleanProjects(claudecode.CleanOptions{
+		Project: "projA",
+		DryRun:  false,
+	})
+	if err != nil {
+		t.Fatalf("CleanProjects: %v", err)
+	}
+
+	if result.Sessions.Count != 2 {
+		t.Errorf("sessions count = %d, want 2", result.Sessions.Count)
+	}
+	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+		t.Error("old session should be deleted")
+	}
+	if _, err := os.Stat(newFile); !os.IsNotExist(err) {
+		t.Error("new session should be deleted")
+	}
+}
+
 // encodeTestPath mirrors encodeProjectPath for test setup.
 func encodeTestPath(path string) string {
 	var b []byte

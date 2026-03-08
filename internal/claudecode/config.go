@@ -63,6 +63,38 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// RemoveProject removes a project entry from the config file.
+// It preserves all other fields by doing a partial read-modify-write.
+func RemoveProject(configPath, projectPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	projectsRaw, ok := raw["projects"]
+	if !ok {
+		return nil
+	}
+	var projects map[string]json.RawMessage
+	if err := json.Unmarshal(projectsRaw, &projects); err != nil {
+		return err
+	}
+	delete(projects, projectPath)
+	updated, err := json.Marshal(projects)
+	if err != nil {
+		return err
+	}
+	raw["projects"] = updated
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, out, 0o644)
+}
+
 // LoadSettings reads and parses a settings.json file.
 func LoadSettings(path string) (*Settings, error) {
 	data, err := os.ReadFile(path)
