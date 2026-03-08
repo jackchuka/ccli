@@ -114,7 +114,8 @@ func countDirs(path string) int {
 	}
 	n := 0
 	for _, e := range entries {
-		if e.IsDir() {
+		fullPath := filepath.Join(path, e.Name())
+		if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
 			n++
 		}
 	}
@@ -128,10 +129,11 @@ func countSessionFiles(projectsDir string) int {
 		return 0
 	}
 	for _, p := range projects {
-		if !p.IsDir() {
+		fullPath := filepath.Join(projectsDir, p.Name())
+		if info, err := os.Stat(fullPath); err != nil || !info.IsDir() {
 			continue
 		}
-		n += countSessionsInDir(filepath.Join(projectsDir, p.Name()))
+		n += countSessionsInDir(fullPath)
 	}
 	return n
 }

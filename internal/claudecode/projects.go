@@ -91,8 +91,9 @@ func buildSessionCountMap(projectsDir string) map[string]int {
 	}
 	counts := make(map[string]int, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
-			counts[e.Name()] = countSessionsInDir(filepath.Join(projectsDir, e.Name()))
+		fullPath := filepath.Join(projectsDir, e.Name())
+		if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
+			counts[e.Name()] = countSessionsInDir(fullPath)
 		}
 	}
 	return counts
