@@ -66,10 +66,12 @@ func discoverSkills(dir string, scope agent.Scope, displaySource string) ([]agen
 	}
 	var skills []agent.Skill
 	for _, e := range entries {
-		if !e.IsDir() {
+		fullPath := filepath.Join(dir, e.Name())
+		info, err := os.Stat(fullPath)
+		if err != nil || !info.IsDir() {
 			continue
 		}
-		skillFile := findSkillFile(filepath.Join(dir, e.Name()))
+		skillFile := findSkillFile(fullPath)
 		if skillFile == "" {
 			continue
 		}
