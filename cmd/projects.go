@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/jackchuka/ccli/internal/agent"
 	"github.com/jackchuka/ccli/internal/output"
@@ -64,13 +66,24 @@ var projectsGetCmd = &cobra.Command{
 func renderProjectList(p *output.Printer, projects []agent.Project) error {
 	noColor := p.NoColor()
 	p.PrintText(output.RenderDivider("Projects", noColor))
-	p.PrintText(output.RenderHeader(fmt.Sprintf("  %-30s %10s %8s %12s", "NAME", "LAST COST", "SESSIONS", "LINES (+/-)"), noColor))
 
 	sort.Slice(projects, func(i, j int) bool {
 		return projects[i].LastCost > projects[j].LastCost
 	})
 
-	for _, proj := range projects {
+	displayNames := disambiguateNames(projects)
+
+	nameWidth := len("NAME")
+	for _, name := range displayNames {
+		if len(name) > nameWidth {
+			nameWidth = len(name)
+		}
+	}
+
+	fmtStr := fmt.Sprintf("  %%-%ds %%10s %%8s %%12s", nameWidth)
+	p.PrintText(output.RenderHeader(fmt.Sprintf(fmtStr, "NAME", "LAST COST", "SESSIONS", "LINES (+/-)"), noColor))
+
+	for i, proj := range projects {
 		cost := ""
 		if proj.LastCost > 0 {
 			cost = fmt.Sprintf("$%.2f", proj.LastCost)
@@ -83,14 +96,74 @@ func renderProjectList(p *output.Printer, projects []agent.Project) error {
 		if proj.LinesAdded > 0 || proj.LinesRemoved > 0 {
 			lines = fmt.Sprintf("+%d/-%d", proj.LinesAdded, proj.LinesRemoved)
 		}
-		name := proj.Name
-		if len(name) > 30 {
-			name = name[:27] + "..."
-		}
-		p.PrintText(fmt.Sprintf("  %-30s %10s %8s %12s", name, cost, sessions, lines))
+		p.PrintText(fmt.Sprintf(fmtStr, displayNames[i], cost, sessions, lines))
 	}
 	p.PrintText(output.RenderDim(fmt.Sprintf("  %d projects", len(projects)), noColor))
 	return nil
+}
+
+// disambiguateNames builds display names for projects, adding parent path
+// segments only when the base name collides with another project.
+func disambiguateNames(projects []agent.Project) []string {
+	names := make([]string, len(projects))
+
+	// Group indices by base name to find duplicates.
+	groups := make(map[string][]int)
+	for i, proj := range projects {
+		groups[proj.Name] = append(groups[proj.Name], i)
+	}
+
+	for _, indices := range groups {
+		if len(indices) == 1 {
+			names[indices[0]] = projects[indices[0]].Name
+			continue
+		}
+		// Split each path into segments and walk backwards until unique.
+		paths := make([][]string, len(indices))
+		for j, idx := range indices {
+			paths[j] = splitPath(projects[idx].Path)
+		}
+		// Start with 1 segment (the base name) and add parents until unique.
+		depth := 2
+		for {
+			seen := make(map[string]int) // display name -> count
+			for j := range indices {
+				seen[suffixName(paths[j], depth)]++
+			}
+			allUnique := true
+			for _, c := range seen {
+				if c > 1 {
+					allUnique = false
+					break
+				}
+			}
+			if allUnique || depth > 5 {
+				break
+			}
+			depth++
+		}
+		for j, idx := range indices {
+			names[idx] = suffixName(paths[j], depth)
+		}
+	}
+	return names
+}
+
+func splitPath(p string) []string {
+	p = filepath.Clean(p)
+	var parts []string
+	for p != "/" && p != "." && p != "" {
+		parts = append([]string{filepath.Base(p)}, parts...)
+		p = filepath.Dir(p)
+	}
+	return parts
+}
+
+func suffixName(parts []string, depth int) string {
+	if depth > len(parts) {
+		depth = len(parts)
+	}
+	return strings.Join(parts[len(parts)-depth:], "/")
 }
 
 func renderProjectGet(p *output.Printer, proj *agent.Project) error {

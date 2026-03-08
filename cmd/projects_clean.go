@@ -21,13 +21,15 @@ var projectsCleanCmd = &cobra.Command{
 	Short: "Delete old session data and associated artifacts",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if cleanOlderThan == "" {
-			return fmt.Errorf("--older-than is required (e.g. 7d, 30d, 90d)")
-		}
-
-		dur, err := parseDayDuration(cleanOlderThan)
-		if err != nil {
-			return err
+		var dur time.Duration
+		if cleanOlderThan != "" {
+			var err error
+			dur, err = parseDayDuration(cleanOlderThan)
+			if err != nil {
+				return err
+			}
+		} else if len(args) == 0 {
+			return fmt.Errorf("--older-than is required when no project is specified (e.g. 7d, 30d, 90d)")
 		}
 
 		a, err := getClaudeAgent()
@@ -84,7 +86,7 @@ func parseDayDuration(s string) (time.Duration, error) {
 
 func renderCleanResult(p *output.Printer, r *claudecode.CleanResult, dryRun bool) error {
 	total := r.Sessions.Count
-	if total == 0 {
+	if total == 0 && !r.ConfigRemoved {
 		return p.PrintText("No sessions found matching criteria")
 	}
 
@@ -115,6 +117,14 @@ func renderCleanResult(p *output.Printer, r *claudecode.CleanResult, dryRun bool
 		}
 		line := fmt.Sprintf("  %s: %d (%s)", c.name, c.result.Count, output.FormatBytes(c.result.Bytes))
 		p.PrintText(output.RenderDim(line, noColor))
+	}
+
+	if r.ConfigRemoved {
+		action := "Removed"
+		if dryRun {
+			action = "Would remove"
+		}
+		p.PrintText(output.RenderDim(fmt.Sprintf("  %s project from config", action), noColor))
 	}
 
 	return nil

@@ -19,14 +19,15 @@ type CleanCategoryResult struct {
 }
 
 type CleanResult struct {
-	Sessions    CleanCategoryResult `json:"sessions" yaml:"sessions"`
-	Debug       CleanCategoryResult `json:"debug" yaml:"debug"`
-	Telemetry   CleanCategoryResult `json:"telemetry" yaml:"telemetry"`
-	Todos       CleanCategoryResult `json:"todos" yaml:"todos"`
-	Tasks       CleanCategoryResult `json:"tasks" yaml:"tasks"`
-	FileHistory CleanCategoryResult `json:"fileHistory" yaml:"fileHistory"`
-	SessionEnv  CleanCategoryResult `json:"sessionEnv" yaml:"sessionEnv"`
-	TotalBytes  int64               `json:"totalBytes" yaml:"totalBytes"`
+	Sessions      CleanCategoryResult `json:"sessions" yaml:"sessions"`
+	Debug         CleanCategoryResult `json:"debug" yaml:"debug"`
+	Telemetry     CleanCategoryResult `json:"telemetry" yaml:"telemetry"`
+	Todos         CleanCategoryResult `json:"todos" yaml:"todos"`
+	Tasks         CleanCategoryResult `json:"tasks" yaml:"tasks"`
+	FileHistory   CleanCategoryResult `json:"fileHistory" yaml:"fileHistory"`
+	SessionEnv    CleanCategoryResult `json:"sessionEnv" yaml:"sessionEnv"`
+	TotalBytes    int64               `json:"totalBytes" yaml:"totalBytes"`
+	ConfigRemoved bool                `json:"configRemoved" yaml:"configRemoved"`
 }
 
 func (a *Agent) CleanProjects(opts CleanOptions) (*CleanResult, error) {
@@ -35,7 +36,10 @@ func (a *Agent) CleanProjects(opts CleanOptions) (*CleanResult, error) {
 		return nil, err
 	}
 
-	cutoff := time.Now().Add(-opts.OlderThan)
+	var cutoff time.Time
+	if opts.OlderThan > 0 {
+		cutoff = time.Now().Add(-opts.OlderThan)
+	}
 	result := &CleanResult{}
 
 	var expiredUUIDs []string
@@ -51,6 +55,17 @@ func (a *Agent) CleanProjects(opts CleanOptions) (*CleanResult, error) {
 		a.cleanTelemetry(uuid, opts.DryRun, result)
 		a.cleanTodos(uuid, opts.DryRun, result)
 		a.cleanUUIDDirs(uuid, opts.DryRun, result)
+	}
+
+	// Remove config entry when cleaning all sessions for a specific project
+	if opts.Project != "" && opts.OlderThan == 0 {
+		configPath, _ := a.resolveProjectConfigPath(opts.Project)
+		if configPath != "" {
+			if !opts.DryRun {
+				_ = RemoveProject(a.paths.ConfigFile, configPath)
+			}
+			result.ConfigRemoved = true
+		}
 	}
 
 	result.TotalBytes = result.Sessions.Bytes +
@@ -95,6 +110,15 @@ func (a *Agent) resolveCleanTargets(project string) ([]string, error) {
 
 // resolveProjectDir finds the encoded project directory matching a query.
 func (a *Agent) resolveProjectDir(query string) (string, error) {
+	configPath, err := a.resolveProjectConfigPath(query)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(a.paths.HomeDir, "projects", encodeProjectPath(configPath)), nil
+}
+
+// resolveProjectConfigPath returns the full config key for a project query.
+func (a *Agent) resolveProjectConfigPath(query string) (string, error) {
 	cfg, err := LoadConfig(a.paths.ConfigFile)
 	if err != nil {
 		return "", err
@@ -102,7 +126,7 @@ func (a *Agent) resolveProjectDir(query string) (string, error) {
 	for path := range cfg.Projects {
 		name := filepath.Base(path)
 		if path == query || name == query || strings.HasSuffix(path, "/"+query) {
-			return filepath.Join(a.paths.HomeDir, "projects", encodeProjectPath(path)), nil
+			return path, nil
 		}
 	}
 	return "", &projectNotFoundError{query}
@@ -131,7 +155,10 @@ func (a *Agent) findExpiredSessions(projDir string, cutoff time.Time, dryRun boo
 			continue
 		}
 		info, err := e.Info()
-		if err != nil || info.ModTime().After(cutoff) {
+		if err != nil {
+			continue
+		}
+		if !cutoff.IsZero() && info.ModTime().After(cutoff) {
 			continue
 		}
 
