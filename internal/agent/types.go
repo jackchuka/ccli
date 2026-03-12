@@ -28,6 +28,7 @@ type Skill struct {
 	Source      string `json:"source" yaml:"source"`
 	Path        string `json:"path" yaml:"path"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+	LinkTarget  string `json:"linkTarget,omitempty" yaml:"linkTarget,omitempty"`
 }
 
 // Project represents a project known to the agent.

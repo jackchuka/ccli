@@ -64,7 +64,19 @@ var skillsGetCmd = &cobra.Command{
 func renderSkillList(p *output.Printer, skills []agent.Skill) error {
 	noColor := p.NoColor()
 	p.PrintText(output.RenderDivider("Skills", noColor))
-	p.PrintText(output.RenderHeader(fmt.Sprintf("    %-30s %-10s %s", "NAME", "SCOPE", "SOURCE"), noColor))
+	hasLinks := false
+	for _, s := range skills {
+		if s.LinkTarget != "" {
+			hasLinks = true
+			break
+		}
+	}
+
+	header := fmt.Sprintf("    %-30s %-10s %s", "NAME", "SCOPE", "SOURCE")
+	if hasLinks {
+		header = fmt.Sprintf("    %-30s %-10s %-20s %s", "NAME", "SCOPE", "SOURCE", "LINK")
+	}
+	p.PrintText(output.RenderHeader(header, noColor))
 
 	sort.Slice(skills, func(i, j int) bool {
 		oi, oj := scopeOrder(skills[i].Scope), scopeOrder(skills[j].Scope)
@@ -78,7 +90,15 @@ func renderSkillList(p *output.Printer, skills []agent.Skill) error {
 	for _, s := range skills {
 		scopeCounts[s.Scope]++
 		bullet := output.RenderScopeBullet(string(s.Scope), noColor)
-		p.PrintText(fmt.Sprintf("  %s %-30s %-10s %s", bullet, s.Name, s.Scope, s.Source))
+		if hasLinks {
+			link := ""
+			if s.LinkTarget != "" {
+				link = "→ " + s.LinkTarget
+			}
+			p.PrintText(fmt.Sprintf("  %s %-30s %-10s %-20s %s", bullet, s.Name, s.Scope, s.Source, link))
+		} else {
+			p.PrintText(fmt.Sprintf("  %s %-30s %-10s %s", bullet, s.Name, s.Scope, s.Source))
+		}
 	}
 	return renderScopeSummary(p, "skills", scopeCounts, len(skills), []agent.Scope{agent.ScopePlugin, agent.ScopePersonal, agent.ScopeProject})
 }

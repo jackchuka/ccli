@@ -83,12 +83,19 @@ func discoverSkills(dir string, scope agent.Scope, displaySource string) ([]agen
 		if name == "" {
 			name = e.Name()
 		}
+		var linkTarget string
+		if e.Type()&os.ModeSymlink != 0 {
+			if target, err := os.Readlink(fullPath); err == nil {
+				linkTarget = target
+			}
+		}
 		skills = append(skills, agent.Skill{
 			Name:        name,
 			Scope:       scope,
 			Source:      displaySource,
 			Path:        skillFile,
 			Description: fm.Description,
+			LinkTarget:  linkTarget,
 		})
 	}
 	return skills, nil
