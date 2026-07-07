@@ -7,6 +7,8 @@ import (
 )
 
 func TestInfo(t *testing.T) {
+	t.Setenv("ANTHROPIC_MODEL", "")
+
 	a := claudecode.NewAgent(claudecode.Paths{
 		ConfigFile:   "testdata/claude.json",
 		SettingsFile: "testdata/settings.json",
@@ -30,5 +32,46 @@ func TestInfo(t *testing.T) {
 	}
 	if info.SkillCount < 1 {
 		t.Errorf("skillCount = %d, want >= 1", info.SkillCount)
+	}
+}
+
+func TestResolveModel(t *testing.T) {
+	tests := []struct {
+		name          string
+		envModel      string
+		settingsModel string
+		want          string
+	}{
+		{
+			name:          "settings model when set",
+			settingsModel: "opus",
+			want:          "opus",
+		},
+		{
+			name:     "env var used when settings empty",
+			envModel: "sonnet",
+			want:     "sonnet",
+		},
+		{
+			name:          "env var takes precedence over settings",
+			envModel:      "haiku",
+			settingsModel: "opus",
+			want:          "haiku",
+		},
+		{
+			name: "fallback when nothing set",
+			want: "default (recommended)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ANTHROPIC_MODEL", tt.envModel)
+			got := claudecode.ResolveModel(tt.settingsModel)
+			if got != tt.want {
+				t.Errorf("ResolveModel(%q) with env %q = %q, want %q",
+					tt.settingsModel, tt.envModel, got, tt.want)
+			}
+		})
 	}
 }
