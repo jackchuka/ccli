@@ -25,9 +25,12 @@ func (a *Agent) Info() (*agent.InstallInfo, error) {
 		info.SettingsPath = a.paths.SettingsFile
 		settings, err := LoadSettings(a.paths.SettingsFile)
 		if err == nil {
-			info.Model = settings.Model
+			info.Model = ResolveModel(settings.Model)
 			info.PluginCount = countEnabledPlugins(settings.EnabledPlugins)
 		}
+	}
+	if info.Model == "" {
+		info.Model = ResolveModel("")
 	}
 
 	// Version and auth status: run concurrently since both spawn external processes
@@ -81,6 +84,20 @@ func (a *Agent) Info() (*agent.InstallInfo, error) {
 	}
 
 	return info, nil
+}
+
+// ResolveModel determines the effective model, mirroring Claude Code's
+// precedence: the ANTHROPIC_MODEL env var overrides the settings.json "model"
+// key. When neither is set (a session-only or --model choice is never
+// persisted), it reports the default rather than an empty string.
+func ResolveModel(settingsModel string) string {
+	if env := strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")); env != "" {
+		return env
+	}
+	if settingsModel != "" {
+		return settingsModel
+	}
+	return "default (recommended)"
 }
 
 func countEnabledPlugins(plugins map[string]bool) int {
