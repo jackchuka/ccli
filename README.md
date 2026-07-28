@@ -1,5 +1,9 @@
 # ccli
 
+[![Test](https://github.com/jackchuka/ccli/actions/workflows/test.yml/badge.svg)](https://github.com/jackchuka/ccli/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/jackchuka/ccli?sort=semver)](https://github.com/jackchuka/ccli/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A unified CLI for inspecting your Claude Code installation — MCP servers, skills, rules, projects, and metadata.
 
 ## Why ccli?
