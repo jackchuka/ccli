@@ -86,7 +86,7 @@ func parseDayDuration(s string) (time.Duration, error) {
 
 func renderCleanResult(p *output.Printer, r *claudecode.CleanResult, dryRun bool) error {
 	total := r.Sessions.Count
-	if total == 0 && !r.ConfigRemoved {
+	if total == 0 && r.Memory.Count == 0 && !r.ConfigRemoved {
 		return p.PrintText("No sessions found matching criteria")
 	}
 
@@ -110,6 +110,7 @@ func renderCleanResult(p *output.Printer, r *claudecode.CleanResult, dryRun bool
 		{"tasks", r.Tasks},
 		{"file history", r.FileHistory},
 		{"session env", r.SessionEnv},
+		{"memory", r.Memory},
 	}
 	for _, c := range categories {
 		if c.result.Count == 0 {

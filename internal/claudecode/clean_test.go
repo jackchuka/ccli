@@ -369,6 +369,127 @@ func TestCleanProjects_AllSessionsForProject(t *testing.T) {
 	}
 }
 
+func TestCleanProjects_RemovesMemoryOnFullProjectClean(t *testing.T) {
+	tmp := t.TempDir()
+
+	projEncoded := encodeTestPath("/Users/test/projA")
+	projDir := filepath.Join(tmp, "projects", projEncoded)
+
+	writeFile(t, filepath.Join(projDir, "aaaa-bbbb-cccc-dddd.jsonl"), `{"msg":"old"}`)
+	memoryFile := filepath.Join(projDir, "memory", "lesson.md")
+	writeFile(t, memoryFile, "a durable lesson")
+
+	cfgPath := writeTestConfig(t, tmp, "/Users/test/projA")
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		ConfigFile: cfgPath,
+		HomeDir:    tmp,
+	})
+	result, err := a.CleanProjects(claudecode.CleanOptions{
+		Project: "projA",
+		DryRun:  false,
+	})
+	if err != nil {
+		t.Fatalf("CleanProjects: %v", err)
+	}
+
+	if result.Memory.Count != 1 {
+		t.Errorf("memory count = %d, want 1", result.Memory.Count)
+	}
+	if result.Memory.Bytes <= 0 {
+		t.Errorf("memory bytes = %d, want > 0", result.Memory.Bytes)
+	}
+	if _, err := os.Stat(filepath.Join(projDir, "memory")); !os.IsNotExist(err) {
+		t.Error("memory directory should be deleted")
+	}
+	if _, err := os.Stat(projDir); !os.IsNotExist(err) {
+		t.Error("emptied project directory should be removed")
+	}
+}
+
+func TestCleanProjects_MemoryDryRun(t *testing.T) {
+	tmp := t.TempDir()
+
+	projEncoded := encodeTestPath("/Users/test/projA")
+	projDir := filepath.Join(tmp, "projects", projEncoded)
+
+	writeFile(t, filepath.Join(projDir, "aaaa-bbbb-cccc-dddd.jsonl"), `{"msg":"old"}`)
+	memoryFile := filepath.Join(projDir, "memory", "lesson.md")
+	writeFile(t, memoryFile, "a durable lesson")
+
+	cfgPath := writeTestConfig(t, tmp, "/Users/test/projA")
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		ConfigFile: cfgPath,
+		HomeDir:    tmp,
+	})
+	result, err := a.CleanProjects(claudecode.CleanOptions{
+		Project: "projA",
+		DryRun:  true,
+	})
+	if err != nil {
+		t.Fatalf("CleanProjects: %v", err)
+	}
+
+	if result.Memory.Count != 1 {
+		t.Errorf("memory count = %d, want 1", result.Memory.Count)
+	}
+	if _, err := os.Stat(memoryFile); os.IsNotExist(err) {
+		t.Error("memory file should survive a dry run")
+	}
+}
+
+// Memory is project-scoped, not session-scoped, so a retention sweep must leave it alone.
+func TestCleanProjects_KeepsMemoryWithOlderThan(t *testing.T) {
+	tmp := t.TempDir()
+
+	projEncoded := encodeTestPath("/Users/test/projA")
+	projDir := filepath.Join(tmp, "projects", projEncoded)
+
+	oldFile := filepath.Join(projDir, "aaaa-bbbb-cccc-dddd.jsonl")
+	writeFile(t, oldFile, `{"msg":"old"}`)
+	setModTime(t, oldFile, time.Now().Add(-60*24*time.Hour))
+
+	memoryFile := filepath.Join(projDir, "memory", "lesson.md")
+	writeFile(t, memoryFile, "a durable lesson")
+
+	cfgPath := writeTestConfig(t, tmp, "/Users/test/projA")
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		ConfigFile: cfgPath,
+		HomeDir:    tmp,
+	})
+	result, err := a.CleanProjects(claudecode.CleanOptions{
+		Project:   "projA",
+		OlderThan: 30 * 24 * time.Hour,
+		DryRun:    false,
+	})
+	if err != nil {
+		t.Fatalf("CleanProjects: %v", err)
+	}
+
+	if result.Memory.Count != 0 {
+		t.Errorf("memory count = %d, want 0", result.Memory.Count)
+	}
+	if _, err := os.Stat(memoryFile); os.IsNotExist(err) {
+		t.Error("memory file should survive --older-than cleanup")
+	}
+}
+
+// writeTestConfig writes a ~/.claude.json with the given project paths.
+func writeTestConfig(t *testing.T, dir string, projectPaths ...string) string {
+	t.Helper()
+	projects := map[string]any{}
+	for _, p := range projectPaths {
+		projects[p] = map[string]any{"hasTrustDialogAccepted": true}
+	}
+	data, err := json.Marshal(map[string]any{"projects": projects})
+	must(t, err)
+	cfgPath := filepath.Join(dir, "claude.json")
+	must(t, os.WriteFile(cfgPath, data, 0o644))
+	return cfgPath
+}
+
 // encodeTestPath mirrors encodeProjectPath for test setup.
 func encodeTestPath(path string) string {
 	var b []byte
