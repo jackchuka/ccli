@@ -26,6 +26,7 @@ type CleanResult struct {
 	Tasks         CleanCategoryResult `json:"tasks" yaml:"tasks"`
 	FileHistory   CleanCategoryResult `json:"fileHistory" yaml:"fileHistory"`
 	SessionEnv    CleanCategoryResult `json:"sessionEnv" yaml:"sessionEnv"`
+	Memory        CleanCategoryResult `json:"memory" yaml:"memory"`
 	TotalBytes    int64               `json:"totalBytes" yaml:"totalBytes"`
 	ConfigRemoved bool                `json:"configRemoved" yaml:"configRemoved"`
 }
@@ -57,8 +58,17 @@ func (a *Agent) CleanProjects(opts CleanOptions) (*CleanResult, error) {
 		a.cleanUUIDDirs(uuid, opts.DryRun, result)
 	}
 
-	// Remove config entry when cleaning all sessions for a specific project
+	// Cleaning all sessions for a specific project retires the project entirely,
+	// so project-scoped state goes too. A --older-than sweep must leave memory
+	// alone: it is not tied to any single session.
 	if opts.Project != "" && opts.OlderThan == 0 {
+		for _, projDir := range projectDirs {
+			a.cleanMemory(projDir, opts.DryRun, result)
+			if !opts.DryRun {
+				_ = os.Remove(projDir)
+			}
+		}
+
 		configPath, _ := a.resolveProjectConfigPath(opts.Project)
 		if configPath != "" {
 			if !opts.DryRun {
@@ -74,7 +84,8 @@ func (a *Agent) CleanProjects(opts CleanOptions) (*CleanResult, error) {
 		result.Todos.Bytes +
 		result.Tasks.Bytes +
 		result.FileHistory.Bytes +
-		result.SessionEnv.Bytes
+		result.SessionEnv.Bytes +
+		result.Memory.Bytes
 
 	return result, nil
 }
@@ -232,6 +243,20 @@ func (a *Agent) cleanTodos(uuid string, dryRun bool, result *CleanResult) {
 		if !dryRun {
 			_ = os.Remove(filepath.Join(todosDir, e.Name()))
 		}
+	}
+}
+
+// cleanMemory removes the project-scoped memory directory.
+func (a *Agent) cleanMemory(projDir string, dryRun bool, result *CleanResult) {
+	target := filepath.Join(projDir, "memory")
+	info, err := os.Stat(target)
+	if err != nil || !info.IsDir() {
+		return
+	}
+	result.Memory.Count++
+	result.Memory.Bytes += dirSize(target)
+	if !dryRun {
+		_ = os.RemoveAll(target)
 	}
 }
 

@@ -104,9 +104,14 @@ ccli projects clean --older-than 30d --dry-run
 
 # Clean a specific project
 ccli projects clean my-project --older-than 7d
+
+# Retire a project entirely: every session, its memory, and its config entry
+ccli projects clean my-project
 ```
 
 Removes old session logs and associated artifacts (debug logs, telemetry, todos, tasks, file history, session environment) matched by session UUID.
+
+Omitting `--older-than` for a named project retires that project: on top of every session it also deletes the project's `memory/` directory and removes the project from `~/.claude.json`. A `--older-than` sweep never touches memory, since memory is project-scoped rather than session-scoped.
 
 ### Output formats
 
