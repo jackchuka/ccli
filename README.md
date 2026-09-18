@@ -99,9 +99,12 @@ ccli memory get CLAUDE.local.md
 Shows managed policy, user, project, and local `CLAUDE.md` files, their
 `@path` imports nested underneath, and the auto memory index, in the order
 Claude Code concatenates them — with line and byte counts against the limits
-it documents. Warns about a `MEMORY.md` past its 200-line load cutoff, a
-`CLAUDE.md` over 200 lines, broken or too-deep imports, imports that need
-external approval, and files shadowed by `claudeMdExcludes`.
+it documents. Warns about a `MEMORY.md` past its 200-line or 25KB load
+cutoff (either one drops the rest), a `CLAUDE.md` over 200 lines (which
+reduces adherence) or over 4 MiB (which Claude Code **skips entirely**),
+broken or too-deep imports, imports that need external approval, files
+shadowed by `claudeMdExcludes`, and auto memory disabled in settings, which
+means `MEMORY.md` does not load at all.
 
 The audit reflects Claude Code's documented resolution rules rather than
 instrumenting a running session; `/context` remains the ground truth for what
