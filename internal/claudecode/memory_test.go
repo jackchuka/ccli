@@ -554,6 +554,70 @@ func TestResolveAutoMemoryDirUsesGitRootSlug(t *testing.T) {
 	}
 }
 
+func TestResolveAutoMemoryDirSettingOverridesEnv(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"autoMemoryDirectory":"~/custom-mem"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "/env/config")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "env-project")
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		SettingsFile: settings,
+		UserHomeDir:  "/home/u",
+		HomeDir:      "/home/u/.claude",
+		CWD:          dir,
+	})
+	if got := a.ResolveAutoMemoryDir(); got != "/home/u/custom-mem" {
+		t.Errorf("ResolveAutoMemoryDir() = %q, want the explicit setting %q to win over the env pair", got, "/home/u/custom-mem")
+	}
+}
+
+func TestResolveAutoMemoryDirFromEnvPair(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "/env/config")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "env-project")
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		UserHomeDir: "/home/u",
+		HomeDir:     "/home/u/.claude",
+		CWD:         dir,
+	})
+	want := filepath.Join("/env/config", "projects", "env-project", "memory")
+	if got := a.ResolveAutoMemoryDir(); got != want {
+		t.Errorf("ResolveAutoMemoryDir() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveAutoMemoryDirGitRootFromWorktreeFile(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "myrepo")
+	sub := filepath.Join(repo, "pkg", "api")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A worktree or submodule's ".git" is a file pointing elsewhere, not a
+	// directory, so the root detection must accept either.
+	if err := os.WriteFile(filepath.Join(repo, ".git"), []byte("gitdir: ../main/.git/worktrees/myrepo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		UserHomeDir: root,
+		HomeDir:     filepath.Join(root, ".claude"),
+		CWD:         sub,
+	})
+
+	got := a.ResolveAutoMemoryDir()
+	if strings.Contains(got, "pkg") || strings.Contains(got, "api") {
+		t.Errorf("slug derived from the working directory, not the worktree's .git file: %q", got)
+	}
+	if !strings.Contains(got, "myrepo") {
+		t.Errorf("slug does not contain the repo name: %q", got)
+	}
+}
+
 func TestAutoMemoryFiles(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) {

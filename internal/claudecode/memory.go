@@ -343,7 +343,9 @@ func (a *Agent) resolveAutoMemoryDir(s *MergedSettings) string {
 }
 
 // gitRoot returns the nearest ancestor of dir containing a .git entry,
-// falling back to dir itself when there is none.
+// falling back to dir itself when there is none. The fallback matters
+// because a working directory outside any git repository must still resolve
+// to a stable auto memory location instead of failing.
 func gitRoot(dir string) string {
 	for cur := dir; cur != ""; {
 		if _, err := os.Stat(filepath.Join(cur, ".git")); err == nil {
@@ -387,7 +389,9 @@ func (a *Agent) autoMemoryFiles(dir string) ([]agent.Memory, []agent.Memory) {
 	return launch, onDemand
 }
 
-// frontmatterValue reads a scalar key from a YAML frontmatter block.
+// frontmatterValue reads a scalar key from a YAML frontmatter block. It
+// hand-scans lines rather than parsing YAML because this project takes on no
+// YAML dependency, and the frontmatter here is always flat scalars.
 func frontmatterValue(block, key string) string {
 	for _, line := range strings.Split(block, "\n") {
 		name, value, ok := strings.Cut(strings.TrimSpace(line), ":")
