@@ -298,26 +298,50 @@ func MaxImportDepth() int { return maxImportDepth }
 
 // applyExclusions marks files matched by claudeMdExcludes. Managed policy
 // files are exempt: Claude Code does not let individual settings exclude them.
+// A file's own exclusion is decided before its imports are considered, so an
+// excluded parent can cascade the exclusion onto its whole import subtree
+// instead of recursing into imports that would never actually load.
 func applyExclusions(files []agent.Memory, patterns []string, home string) {
 	if len(patterns) == 0 {
 		return
 	}
 	for i := range files {
 		f := &files[i]
-		applyExclusions(f.Imports, patterns, home)
 
-		if f.Scope == agent.ScopeManaged || f.Path == "" {
-			continue
-		}
-		for _, raw := range patterns {
-			pattern := expandTilde(raw, home)
-			if globMatch(pattern, f.Path) || (f.LinkTarget != "" && globMatch(pattern, f.LinkTarget)) {
-				f.Excluded = true
-				f.ExcludedBy = raw
-				f.Warnings = append(f.Warnings, "excluded by claudeMdExcludes, so it does not load")
-				break
+		if f.Scope != agent.ScopeManaged && f.Path != "" {
+			for _, raw := range patterns {
+				pattern := expandTilde(raw, home)
+				if globMatch(pattern, f.Path) || (f.LinkTarget != "" && globMatch(pattern, f.LinkTarget)) {
+					f.Excluded = true
+					f.ExcludedBy = raw
+					f.Warnings = append(f.Warnings, "excluded by claudeMdExcludes, so it does not load")
+					break
+				}
 			}
 		}
+
+		if f.Excluded {
+			excludeImportSubtree(f.Imports, f.Path, f.ExcludedBy)
+		} else {
+			applyExclusions(f.Imports, patterns, home)
+		}
+	}
+}
+
+// excludeImportSubtree cascades an exclusion onto every import beneath an
+// excluded file: Claude Code never reads an excluded parent, so its imports
+// never load either, regardless of whether they individually match a
+// pattern. ExcludedBy carries the pattern that caused the cascade, while the
+// warning names the importer so the reason is legible without following the
+// chain back up.
+func excludeImportSubtree(imports []agent.Memory, importerPath, importerPattern string) {
+	for i := range imports {
+		imp := &imports[i]
+		imp.Excluded = true
+		imp.ExcludedBy = importerPattern
+		imp.Warnings = append(imp.Warnings,
+			fmt.Sprintf("not loaded: imported by %s, which is excluded", importerPath))
+		excludeImportSubtree(imp.Imports, importerPath, importerPattern)
 	}
 }
 
@@ -466,16 +490,17 @@ func (a *Agent) ListMemory() (*agent.MemoryReport, error) {
 	autoDir := a.resolveAutoMemoryDir(s)
 	autoLaunch, autoOnDemand := a.autoMemoryFiles(autoDir)
 
-	launch := append(a.launchTierFiles(s), autoLaunch...)
-	for i := range launch {
-		seen := map[string]bool{launch[i].Path: true}
-		a.expandImports(&launch[i], launch[i].Scope, 1, seen)
-	}
+	launch := a.ExpandInto(append(a.launchTierFiles(s), autoLaunch...))
 
 	onDemand := append(a.onDemandSubdirFiles(), autoOnDemand...)
 
 	files := append(launch, onDemand...)
 	applyExclusions(files, s.ClaudeMdExcludes, a.paths.UserHomeDir)
+	if !s.AutoMemoryEnabled {
+		// MEMORY.md is gathered above regardless of the setting, so its
+		// non-load has to be recorded here rather than skipped upstream.
+		markAutoMemoryDisabled(files)
+	}
 	for i := range files {
 		annotateWarnings(&files[i])
 	}
@@ -489,9 +514,27 @@ func (a *Agent) ListMemory() (*agent.MemoryReport, error) {
 	return report, nil
 }
 
+// markAutoMemoryDisabled warns on the auto memory index when the setting
+// turns auto memory off. summarize excludes MemoryKindAutoIndex and
+// MemoryKindAutoTopic entries from the totals in that case, since Claude
+// Code never loads either when the setting is disabled.
+func markAutoMemoryDisabled(files []agent.Memory) {
+	for i := range files {
+		if files[i].Kind == agent.MemoryKindAutoIndex {
+			files[i].Warnings = append(files[i].Warnings,
+				"auto memory is disabled in settings, so it does not load")
+		}
+	}
+}
+
 // GetMemory resolves a scope name ("managed", "personal", "user", "project",
 // "local", "auto") or a path suffix against the audit.
 func (a *Agent) GetMemory(name string) (*agent.Memory, error) {
+	if name == "" || name == "." {
+		// Without this guard, the suffix match below treats an empty or "."
+		// name as matching the managed inline entry, whose Path is "".
+		return nil, fmt.Errorf("memory %q not found", name)
+	}
 	report, err := a.ListMemory()
 	if err != nil {
 		return nil, err
@@ -554,8 +597,10 @@ func annotateWarnings(m *agent.Memory) {
 // with the file it came from.
 func summarize(report *agent.MemoryReport) {
 	for _, m := range flattenMemory(report.Files) {
+		autoDisabled := !report.AutoMemoryEnabled &&
+			(m.Kind == agent.MemoryKindAutoIndex || m.Kind == agent.MemoryKindAutoTopic)
 		switch {
-		case m.Excluded, !m.Exists:
+		case m.Excluded, !m.Exists, autoDisabled:
 			// Counted nowhere: it does not load.
 		case m.Tier == agent.MemoryTierLaunch:
 			report.LaunchFiles++

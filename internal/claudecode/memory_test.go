@@ -112,6 +112,10 @@ func TestReadMemoryFile(t *testing.T) {
 // returns the root plus a Paths pointing at a nested working directory.
 func memoryFixture(t *testing.T) (string, claudecode.Paths) {
 	t.Helper()
+	// Neutralize the auto-memory env pair so this fixture never resolves to
+	// a real Claude Code memory directory on the machine running the test.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
 	root := t.TempDir()
 
 	home := filepath.Join(root, "home")
@@ -748,6 +752,10 @@ func TestListMemoryReport(t *testing.T) {
 }
 
 func TestListMemoryTotalsSkipExcludedAndOnDemand(t *testing.T) {
+	// Neutralize the auto-memory env pair so this test never resolves to a
+	// real Claude Code memory directory on the machine running the test.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
 	root := t.TempDir()
 	claudeHome := filepath.Join(root, "home", ".claude")
 	repo := filepath.Join(root, "repo")
@@ -829,10 +837,12 @@ func TestListMemoryWarnsOnOversizedFiles(t *testing.T) {
 	var sawIndex, sawAdvisory bool
 	for _, f := range claudecode.FlattenMemory(report.Files) {
 		for _, w := range f.Warnings {
-			if f.Kind == agent.MemoryKindAutoIndex && strings.Contains(w, "200") {
+			// Match the distinctive phrase, not a shared "200" substring, so
+			// the two branches in annotateWarnings are pinned separately.
+			if f.Kind == agent.MemoryKindAutoIndex && strings.Contains(w, "only the first 200 load") {
 				sawIndex = true
 			}
-			if f.Kind == agent.MemoryKindClaudeMD && strings.Contains(w, "200") {
+			if f.Kind == agent.MemoryKindClaudeMD && strings.Contains(w, "200-line guideline") {
 				sawAdvisory = true
 			}
 		}
@@ -842,6 +852,177 @@ func TestListMemoryWarnsOnOversizedFiles(t *testing.T) {
 	}
 	if !sawAdvisory {
 		t.Error("CLAUDE.md over 200 lines did not warn")
+	}
+}
+
+func TestListMemoryExcludedFileImportsDoNotCount(t *testing.T) {
+	// Neutralize the auto-memory env pair so this test never resolves to a
+	// real Claude Code memory directory on the machine running the test.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
+	root := t.TempDir()
+	claudeHome := filepath.Join(root, "home", ".claude")
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(claudeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := filepath.Join(claudeHome, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"claudeMdExcludes":["**/repo/CLAUDE.md"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("@notes.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 300 lines: large enough that, if counted, it could not be mistaken
+	// for anything else contributing to the totals.
+	if err := os.WriteFile(filepath.Join(repo, "notes.md"), []byte(strings.Repeat("line\n", 300)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		SettingsFile: settings,
+		HomeDir:      claudeHome,
+		UserHomeDir:  filepath.Join(root, "home"),
+		CWD:          repo,
+	})
+	report, err := a.ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	if report.LaunchFiles != 0 {
+		t.Errorf("LaunchFiles = %d, want 0: the only launch-tier file is excluded", report.LaunchFiles)
+	}
+	if report.LaunchLines != 0 {
+		t.Errorf("LaunchLines = %d, want 0: an excluded file's import never loads either", report.LaunchLines)
+	}
+
+	var importExcluded bool
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		if filepath.Base(f.Path) == "notes.md" {
+			importExcluded = f.Excluded
+		}
+	}
+	if !importExcluded {
+		t.Error("notes.md, imported by an excluded file, should itself be marked excluded")
+	}
+}
+
+func TestListMemoryAutoMemoryDisabledDoesNotCount(t *testing.T) {
+	// Neutralize the auto-memory env pair so this test never resolves to a
+	// real Claude Code memory directory on the machine running the test.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
+	root := t.TempDir()
+	claudeHome := filepath.Join(root, "home", ".claude")
+	memDir := filepath.Join(root, "mem")
+	if err := os.MkdirAll(claudeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := filepath.Join(claudeHome, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"autoMemoryEnabled":false,"autoMemoryDirectory":"`+memDir+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeHome, "CLAUDE.md"), []byte(strings.Repeat("rule\n", 250)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "MEMORY.md"), []byte("a\nb\nc\nd\ne\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		SettingsFile: settings,
+		HomeDir:      claudeHome,
+		UserHomeDir:  filepath.Join(root, "home"),
+		CWD:          root,
+	})
+	report, err := a.ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	if report.LaunchFiles != 1 {
+		t.Errorf("LaunchFiles = %d, want 1: MEMORY.md must not count when auto memory is disabled", report.LaunchFiles)
+	}
+	if report.LaunchLines != 250 {
+		t.Errorf("LaunchLines = %d, want 250: MEMORY.md's lines must not count when auto memory is disabled", report.LaunchLines)
+	}
+
+	var sawDisabledWarning bool
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		if f.Kind == agent.MemoryKindAutoIndex {
+			for _, w := range f.Warnings {
+				if strings.Contains(w, "disabled") {
+					sawDisabledWarning = true
+				}
+			}
+		}
+	}
+	if !sawDisabledWarning {
+		t.Error("MEMORY.md should warn that auto memory is disabled")
+	}
+}
+
+func TestListMemoryTotalsExactArithmetic(t *testing.T) {
+	// Neutralize the auto-memory env pair so this test never resolves to a
+	// real Claude Code memory directory on the machine running the test.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
+	root := t.TempDir()
+	claudeHome := filepath.Join(root, "home", ".claude")
+	repo := filepath.Join(root, "repo")
+	pkg := filepath.Join(repo, "pkg")
+	for _, d := range []string{claudeHome, pkg} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	settings := filepath.Join(claudeHome, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"claudeMdExcludes":["**/repo/CLAUDE.local.md"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, body string) {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(claudeHome, "CLAUDE.md"), "personal one\n") // 1 line, 13 bytes
+	write(filepath.Join(repo, "CLAUDE.md"), "@imported.md\n")       // 1 line, 13 bytes; imports imported.md
+	write(filepath.Join(repo, "imported.md"), "one\ntwo\nthree\n")  // 3 lines, 14 bytes
+	write(filepath.Join(repo, "CLAUDE.local.md"), "excluded, must not count\n")
+	write(filepath.Join(pkg, "CLAUDE.md"), "on demand only\n")
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		SettingsFile: settings,
+		HomeDir:      claudeHome,
+		UserHomeDir:  filepath.Join(root, "home"),
+		CWD:          repo,
+	})
+	report, err := a.ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	if report.LaunchFiles != 3 {
+		t.Fatalf("LaunchFiles = %d, want 3 (personal, project CLAUDE.md, its import)", report.LaunchFiles)
+	}
+	if report.LaunchLines != 5 {
+		t.Errorf("LaunchLines = %d, want 5 (1 + 1 + 3)", report.LaunchLines)
+	}
+	if report.LaunchBytes != 40 {
+		t.Errorf("LaunchBytes = %d, want 40 (13 + 13 + 14)", report.LaunchBytes)
+	}
+	if report.OnDemandFiles != 1 {
+		t.Errorf("OnDemandFiles = %d, want 1", report.OnDemandFiles)
 	}
 }
 
@@ -864,6 +1045,23 @@ func TestAnnotateWarningsSizeLimits(t *testing.T) {
 		{
 			name:     "an excluded file gets no size warning",
 			memory:   agent.Memory{Kind: agent.MemoryKindClaudeMD, Exists: true, Lines: 900, Excluded: true},
+			wantSnip: "",
+		},
+		// At-limit cases: the limits are exclusive, so a file exactly at the
+		// threshold must stay silent. These catch a ">" flipped to ">=".
+		{
+			name:     "MEMORY.md at exactly the 25KB cutoff does not warn",
+			memory:   agent.Memory{Kind: agent.MemoryKindAutoIndex, Exists: true, Lines: 10, Bytes: 25 * 1024},
+			wantSnip: "",
+		},
+		{
+			name:     "CLAUDE.md at exactly 4 MiB does not warn",
+			memory:   agent.Memory{Kind: agent.MemoryKindClaudeMD, Exists: true, Lines: 10, Bytes: 4 << 20},
+			wantSnip: "",
+		},
+		{
+			name:     "CLAUDE.md at exactly 200 lines does not warn",
+			memory:   agent.Memory{Kind: agent.MemoryKindClaudeMD, Exists: true, Lines: 200, Bytes: 10},
 			wantSnip: "",
 		},
 	}
@@ -921,6 +1119,22 @@ func TestGetMemory(t *testing.T) {
 
 	t.Run("not found", func(t *testing.T) {
 		if _, err := a.GetMemory("nope.md"); err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+
+	t.Run("rejects an empty name", func(t *testing.T) {
+		// Without a guard this matches the managed inline entry, whose
+		// Path is "".
+		if _, err := a.GetMemory(""); err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+
+	t.Run("rejects a dot", func(t *testing.T) {
+		// filepath.Base("") == ".", so this would also match the managed
+		// inline entry without a guard.
+		if _, err := a.GetMemory("."); err == nil {
 			t.Fatal("expected an error")
 		}
 	})
