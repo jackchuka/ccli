@@ -325,3 +325,86 @@ func applyExclusions(files []agent.Memory, patterns []string, home string) {
 func ApplyExclusions(files []agent.Memory, patterns []string, home string) {
 	applyExclusions(files, patterns, home)
 }
+
+// resolveAutoMemoryDir finds the auto memory directory, mirroring Claude
+// Code's resolution: an explicit autoMemoryDirectory setting wins; then a
+// CLAUDE_CONFIG_DIR plus CLAUDE_CODE_PROJECT_DIR_NAME pair; otherwise the
+// per-repository default under ~/.claude/projects/.
+func (a *Agent) resolveAutoMemoryDir(s *MergedSettings) string {
+	if s.AutoMemoryDirectory != "" {
+		return expandTilde(s.AutoMemoryDirectory, a.paths.UserHomeDir)
+	}
+	if configDir, name := os.Getenv("CLAUDE_CONFIG_DIR"), os.Getenv("CLAUDE_CODE_PROJECT_DIR_NAME"); configDir != "" && name != "" {
+		return filepath.Join(configDir, "projects", name, "memory")
+	}
+	// Auto memory is per repository, so all worktrees and subdirectories of
+	// one repo share a directory keyed on the repository root.
+	return filepath.Join(a.paths.HomeDir, "projects", encodeProjectPath(gitRoot(a.paths.CWD)), "memory")
+}
+
+// gitRoot returns the nearest ancestor of dir containing a .git entry,
+// falling back to dir itself when there is none.
+func gitRoot(dir string) string {
+	for cur := dir; cur != ""; {
+		if _, err := os.Stat(filepath.Join(cur, ".git")); err == nil {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	return dir
+}
+
+// autoMemoryFiles splits an auto memory directory into the MEMORY.md index,
+// which loads at launch, and the topic files, which Claude reads on demand.
+func (a *Agent) autoMemoryFiles(dir string) ([]agent.Memory, []agent.Memory) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil
+	}
+
+	var launch, onDemand []agent.Memory
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if e.Name() == "MEMORY.md" {
+			launch = append(launch, readMemoryFile(path, agent.ScopeAuto, agent.MemoryKindAutoIndex, agent.MemoryTierLaunch))
+			continue
+		}
+		m := readMemoryFile(path, agent.ScopeAuto, agent.MemoryKindAutoTopic, agent.MemoryTierOnDemand)
+		if data, err := os.ReadFile(path); err == nil {
+			block := extractFrontmatterBlock(string(data))
+			m.Type = frontmatterValue(block, "type")
+			m.Modified = frontmatterValue(block, "modified")
+		}
+		onDemand = append(onDemand, m)
+	}
+	return launch, onDemand
+}
+
+// frontmatterValue reads a scalar key from a YAML frontmatter block.
+func frontmatterValue(block, key string) string {
+	for _, line := range strings.Split(block, "\n") {
+		name, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok || name != key {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"'`)
+	}
+	return ""
+}
+
+// ResolveAutoMemoryDir exposes resolveAutoMemoryDir for tests.
+func (a *Agent) ResolveAutoMemoryDir() string {
+	return a.resolveAutoMemoryDir(LoadMergedSettings(a.paths))
+}
+
+// AutoMemoryFiles exposes autoMemoryFiles for tests.
+func (a *Agent) AutoMemoryFiles(dir string) ([]agent.Memory, []agent.Memory) {
+	return a.autoMemoryFiles(dir)
+}

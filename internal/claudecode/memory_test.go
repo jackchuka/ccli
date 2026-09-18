@@ -507,3 +507,96 @@ func TestApplyExclusionsExpandsTilde(t *testing.T) {
 		t.Error("a ~/-prefixed pattern should match the expanded path")
 	}
 }
+
+func TestResolveAutoMemoryDirFromSettings(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"autoMemoryDirectory":"~/custom-mem"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := claudecode.NewAgent(claudecode.Paths{
+		SettingsFile: settings,
+		UserHomeDir:  "/home/u",
+		HomeDir:      "/home/u/.claude",
+		CWD:          dir,
+	})
+	if got := a.ResolveAutoMemoryDir(); got != "/home/u/custom-mem" {
+		t.Errorf("ResolveAutoMemoryDir() = %q, want %q", got, "/home/u/custom-mem")
+	}
+}
+
+func TestResolveAutoMemoryDirUsesGitRootSlug(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "myrepo")
+	sub := filepath.Join(repo, "pkg", "api")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		UserHomeDir: root,
+		HomeDir:     filepath.Join(root, ".claude"),
+		CWD:         sub, // a subdirectory: the slug must still be the repo root
+	})
+
+	got := a.ResolveAutoMemoryDir()
+	if !strings.HasSuffix(got, filepath.Join("memory")) {
+		t.Fatalf("got %q, want a path ending in memory", got)
+	}
+	if strings.Contains(got, "pkg") || strings.Contains(got, "api") {
+		t.Errorf("slug derived from the working directory, not the git root: %q", got)
+	}
+	if !strings.Contains(got, "myrepo") {
+		t.Errorf("slug does not contain the repo name: %q", got)
+	}
+}
+
+func TestAutoMemoryFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("MEMORY.md", "- prefers pnpm\n- API tests need redis\n")
+	write("user_role.md", "---\ntype: user\nmodified: 2026-09-01T10:00:00Z\n---\n\nStaff engineer\n")
+	write("feedback_testing.md", "---\ntype: feedback\n---\n\nUse table tests\n")
+	write("notes.txt", "ignored\n")
+
+	a := claudecode.NewAgent(claudecode.Paths{UserHomeDir: dir, CWD: dir})
+	launch, onDemand := a.AutoMemoryFiles(dir)
+
+	if len(launch) != 1 || launch[0].Kind != agent.MemoryKindAutoIndex || launch[0].Tier != agent.MemoryTierLaunch {
+		t.Fatalf("launch tier = %+v, want one auto-index entry", launch)
+	}
+	if launch[0].Scope != agent.ScopeAuto {
+		t.Errorf("scope = %q, want %q", launch[0].Scope, agent.ScopeAuto)
+	}
+	if len(onDemand) != 2 {
+		t.Fatalf("on-demand = %d files, want 2 (.txt must be ignored)", len(onDemand))
+	}
+	byName := map[string]agent.Memory{}
+	for _, f := range onDemand {
+		byName[filepath.Base(f.Path)] = f
+	}
+	if got := byName["user_role.md"]; got.Type != "user" || got.Modified != "2026-09-01T10:00:00Z" {
+		t.Errorf("user_role.md frontmatter = type %q modified %q", got.Type, got.Modified)
+	}
+	if got := byName["feedback_testing.md"]; got.Type != "feedback" || got.Modified != "" {
+		t.Errorf("feedback_testing.md frontmatter = type %q modified %q", got.Type, got.Modified)
+	}
+	if byName["user_role.md"].Tier != agent.MemoryTierOnDemand {
+		t.Error("topic files must be on-demand tier")
+	}
+}
+
+func TestAutoMemoryFilesMissingDir(t *testing.T) {
+	a := claudecode.NewAgent(claudecode.Paths{})
+	launch, onDemand := a.AutoMemoryFiles(filepath.Join(t.TempDir(), "nope"))
+	if len(launch) != 0 || len(onDemand) != 0 {
+		t.Errorf("missing memory directory should yield nothing, got %d/%d", len(launch), len(onDemand))
+	}
+}
