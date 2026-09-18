@@ -1,13 +1,16 @@
 package claudecode_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/jackchuka/ccli/internal/agent"
 	"github.com/jackchuka/ccli/internal/claudecode"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 func TestGlobMatch(t *testing.T) {
@@ -1452,5 +1455,64 @@ func TestLaunchMemoryReportSkipsTheOnDemandWalk(t *testing.T) {
 		if f.Tier == agent.MemoryTierOnDemand {
 			t.Errorf("launch-only audit discovered on-demand file %q", f.Path)
 		}
+	}
+}
+
+// TestMemoryReportRoundTripsJSONAndYAML guards the struct tags on the
+// nested-import shape that the whole machine-readable output is built
+// around. Both formats are produced by tag-driven marshalling, so a typo on
+// Imports would flatten the tree in every consumer without any test noticing.
+func TestMemoryReportRoundTripsJSONAndYAML(t *testing.T) {
+	repo, paths := memoryTestPaths(t, `{"claudeMdExcludes":["**/repo/CLAUDE.local.md"]}`)
+	if err := os.MkdirAll(filepath.Join(repo, "docs", "adr"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMemoryFile(t, filepath.Join(repo, "CLAUDE.md"), "@docs/architecture.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "docs", "architecture.md"), "@adr/0003.md\n@missing.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "docs", "adr", "0003.md"), "decision\n")
+	writeMemoryFile(t, filepath.Join(repo, "CLAUDE.local.md"), "excluded\n")
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+	// Guard the guard: a flat fixture would let a broken Imports tag pass.
+	var deepest int
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		if f.Depth > deepest {
+			deepest = f.Depth
+		}
+	}
+	if deepest < 2 {
+		t.Fatalf("fixture must nest imports at least two hops deep, got %d", deepest)
+	}
+
+	tests := []struct {
+		name      string
+		marshal   func(any) ([]byte, error)
+		unmarshal func([]byte, any) error
+		nestedKey string
+	}{
+		{"json", json.Marshal, json.Unmarshal, `"imports"`},
+		{"yaml", yaml.Marshal, func(b []byte, v any) error { return yaml.Unmarshal(b, v) }, "imports:"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := tt.marshal(report)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if !strings.Contains(string(data), tt.nestedKey) {
+				t.Fatalf("encoded report has no %s key, so imports are not nested:\n%s", tt.nestedKey, data)
+			}
+
+			var got agent.MemoryReport
+			if err := tt.unmarshal(data, &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !reflect.DeepEqual(&got, report) {
+				t.Errorf("round trip changed the report:\n got %+v\nwant %+v", got, *report)
+			}
+		})
 	}
 }
