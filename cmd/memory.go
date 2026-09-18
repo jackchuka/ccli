@@ -252,13 +252,18 @@ func pluralize(n int, singular string) string {
 	return singular + "s"
 }
 
-// elideMiddlePath shortens a display path to fit within width runes,
-// keeping the leading "./" or "~/" marker and the full basename intact —
-// the basename is what a reader scans for, and the fixed-width name column
-// is what lets this command render a tree instead of a table. When there
-// is no directory component to elide, the path is returned unshortened
-// rather than cutting into the basename.
+// elideMiddlePath shortens a display path to at most width runes, keeping
+// the leading "./" or "~/" marker and as much of the basename as fits —
+// the basename is what a reader scans for. The result never exceeds
+// width: it is a column shared with sibling rows at other depths and
+// budgets, so fitting it takes priority over showing the basename in
+// full. When even the basename alone is wider than its budget, its tail
+// (nearest the extension) is kept over its head, since that's the more
+// identifying part.
 func elideMiddlePath(path string, width int) string {
+	if width <= 0 {
+		return ""
+	}
 	if utf8.RuneCountInString(path) <= width {
 		return path
 	}
@@ -268,27 +273,29 @@ func elideMiddlePath(path string, width int) string {
 	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "~/") {
 		prefix, rest = path[:2], path[2:]
 	}
-
-	dir, base := filepath.Split(rest)
-	if dir == "" {
-		return path
-	}
-
+	base := filepath.Base(rest)
+	baseRunes := []rune(base)
 	const ellipsis = "…"
-	tail := ellipsis + "/" + base
-	minimal := prefix + tail
-	minimalLen := utf8.RuneCountInString(minimal)
-	if minimalLen >= width {
-		return minimal
+
+	// Reserve room for the prefix, the ellipsis, and the "/" before the
+	// basename; whatever's left is the basename's budget.
+	reserved := utf8.RuneCountInString(prefix) + utf8.RuneCountInString(ellipsis) + 1
+	baseBudget := width - reserved
+	if baseBudget <= 0 {
+		full := []rune(path)
+		return string(full[len(full)-width:])
+	}
+	if len(baseRunes) > baseBudget {
+		return prefix + ellipsis + "/" + string(baseRunes[len(baseRunes)-baseBudget:])
 	}
 
-	headBudget := width - minimalLen
-	dirRunes := []rune(dir)
+	headBudget := baseBudget - len(baseRunes)
+	dirRunes := []rune(strings.TrimSuffix(rest, base))
 	if headBudget > len(dirRunes) {
 		headBudget = len(dirRunes)
 	}
 	head := strings.TrimRight(string(dirRunes[:headBudget]), "/")
-	return prefix + head + tail
+	return prefix + head + ellipsis + "/" + string(baseRunes)
 }
 
 // memoryDisplayPath shortens a path for display: inside the working

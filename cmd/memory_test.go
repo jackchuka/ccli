@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/jackchuka/ccli/internal/agent"
 	"github.com/jackchuka/ccli/internal/output"
@@ -124,25 +125,39 @@ func TestRenderMemoryList(t *testing.T) {
 	})
 }
 
-// TestMemoryColumnAlignment renders a short path, a long path that would
-// overflow the fixed-width name column unelided, and a nested import, and
-// asserts the size column begins at the same rune index on every row. A
-// strings.Contains check cannot catch a column that has drifted right.
+// TestMemoryColumnAlignment renders a short top-level path, a long
+// top-level path, and long imports at depth 1 and depth 2, then locates
+// each row's size field independently (by the exact Lines/Bytes text it
+// must contain) and asserts all four start at the same offset. The
+// imported basenames are long enough that even the ellipsis-plus-basename
+// skeleton doesn't fit a nested row's shrunken budget, which is what
+// actually overflowed the name column before elideMiddlePath bounded its
+// output — a strings.Contains check, or a fixture whose long segment is
+// all in the directory portion, would not have caught that.
+//
+// Offsets are measured in runes, not bytes: rows contain multi-byte scope
+// bullets, box-drawing characters, and the ellipsis, so a byte offset
+// would not agree with a rune offset even on correctly aligned output.
 func TestMemoryColumnAlignment(t *testing.T) {
-	longPath := "/home/u/repo/" + strings.Repeat("very-long-directory-name/", 4) + "CLAUDE.md"
 	report := &agent.MemoryReport{
 		Files: []agent.Memory{
 			{Path: "/home/u/repo/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD,
-				Tier: agent.MemoryTierLaunch, Exists: true, Lines: 88, Bytes: 3400},
-			{Path: longPath, Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD,
-				Tier: agent.MemoryTierLaunch, Exists: true, Lines: 5, Bytes: 100,
+				Tier: agent.MemoryTierLaunch, Exists: true, Lines: 2, Bytes: 107},
+			{Path: "/home/u/repo/0001-an-extremely-long-top-level-decision-record-filename-example.md",
+				Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD,
+				Tier: agent.MemoryTierLaunch, Exists: true, Lines: 3, Bytes: 210,
 				Imports: []agent.Memory{
-					{Path: "/home/u/repo/" + strings.Repeat("nested-import-dir/", 3) + "deep.md",
+					{Path: "/home/u/repo/0007-a-lengthy-decision-record-filename-for-testing-alignment.md",
 						Scope: agent.ScopeProject, Kind: agent.MemoryKindImport,
-						Tier: agent.MemoryTierLaunch, Exists: true, Lines: 10, Bytes: 50, Depth: 1},
+						Tier: agent.MemoryTierLaunch, Exists: true, Lines: 4, Bytes: 320, Depth: 1,
+						Imports: []agent.Memory{
+							{Path: "/home/u/repo/0012-another-lengthy-decision-record-filename-example-long.md",
+								Scope: agent.ScopeProject, Kind: agent.MemoryKindImport,
+								Tier: agent.MemoryTierLaunch, Exists: true, Lines: 5, Bytes: 430, Depth: 2},
+						}},
 				}},
 		},
-		LaunchFiles: 2,
+		LaunchFiles: 4,
 	}
 
 	var buf bytes.Buffer
@@ -150,38 +165,36 @@ func TestMemoryColumnAlignment(t *testing.T) {
 	if err := renderMemoryList(p, report, "/home/u", "/home/u/repo", false); err != nil {
 		t.Fatalf("renderMemoryList: %v", err)
 	}
+	lines := strings.Split(buf.String(), "\n")
 
-	// Mirrors renderMemoryNode's format string: 2 leading spaces + a
-	// 1-rune bullet + 1 space + the 9-wide scope field + 1 space + the
-	// name column + 1 space, before the size text begins.
-	const sizeCol = 2 + 1 + 1 + 9 + 1 + nameColWidth + 1
-
-	wants := map[string]string{
-		"./CLAUDE.md":       fmt.Sprintf("%5dL %10s", 88, output.FormatBytes(3400)),
-		"very-long":         fmt.Sprintf("%5dL %10s", 5, output.FormatBytes(100)),
-		"nested-import-dir": fmt.Sprintf("%5dL %10s", 10, output.FormatBytes(50)),
+	rows := []struct {
+		name  string
+		lines int
+		bytes int64
+	}{
+		{"short top-level", 2, 107},
+		{"long top-level", 3, 210},
+		{"long import depth 1", 4, 320},
+		{"long import depth 2", 5, 430},
 	}
-	found := map[string]bool{}
-	for _, line := range strings.Split(buf.String(), "\n") {
-		runes := []rune(line)
-		for marker, want := range wants {
-			if !strings.Contains(line, marker) {
-				continue
-			}
-			found[marker] = true
-			if len(runes) < sizeCol+len([]rune(want)) {
-				t.Errorf("line for %q too short to hold the size column at %d:\n%q", marker, sizeCol, line)
-				continue
-			}
-			got := string(runes[sizeCol : sizeCol+len([]rune(want))])
-			if got != want {
-				t.Errorf("size column misaligned for %q: got %q at rune %d, want %q\nfull line: %q", marker, got, sizeCol, want, line)
+
+	var want int
+	for i, r := range rows {
+		sizeText := fmt.Sprintf("%5dL %10s", r.lines, output.FormatBytes(r.bytes))
+		offset := -1
+		for _, line := range lines {
+			if idx := strings.Index(line, sizeText); idx >= 0 {
+				offset = utf8.RuneCountInString(line[:idx]) // rune offset, not byte offset
+				break
 			}
 		}
-	}
-	for marker := range wants {
-		if !found[marker] {
-			t.Fatalf("expected a rendered row containing %q, got:\n%s", marker, buf.String())
+		if offset < 0 {
+			t.Fatalf("%s: could not find its size field %q in output:\n%s", r.name, sizeText, buf.String())
+		}
+		if i == 0 {
+			want = offset
+		} else if offset != want {
+			t.Errorf("%s: size column starts at rune %d, want %d (same as %s)", r.name, offset, want, rows[0].name)
 		}
 	}
 }
