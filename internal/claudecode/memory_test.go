@@ -530,6 +530,10 @@ func TestResolveAutoMemoryDirFromSettings(t *testing.T) {
 }
 
 func TestResolveAutoMemoryDirUsesGitRootSlug(t *testing.T) {
+	// Neutralize the auto-memory env pair: this test pins the git-root
+	// fallback, which only runs when the pair is unset.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
 	root := t.TempDir()
 	repo := filepath.Join(root, "myrepo")
 	sub := filepath.Join(repo, "pkg", "api")
@@ -595,6 +599,10 @@ func TestResolveAutoMemoryDirFromEnvPair(t *testing.T) {
 }
 
 func TestResolveAutoMemoryDirGitRootFromWorktreeFile(t *testing.T) {
+	// Neutralize the auto-memory env pair: this test pins the git-root
+	// fallback, which only runs when the pair is unset.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
 	root := t.TempDir()
 	repo := filepath.Join(root, "myrepo")
 	sub := filepath.Join(repo, "pkg", "api")
