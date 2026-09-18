@@ -302,24 +302,74 @@ func TestExpandImportsNestsAndLimitsDepth(t *testing.T) {
 	write("two.md", "@three.md\n")
 	write("three.md", "@four.md\n")
 	write("four.md", "@five.md\n")
-	write("five.md", "too deep\n")
+	// five.md's own import must never be read: expansion stops at five.
+	write("five.md", "@six.md\n")
 
 	a := claudecode.NewAgent(claudecode.Paths{CWD: dir, UserHomeDir: dir})
 	root := claudecode.ReadMemoryFile(filepath.Join(dir, "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch)
 	expanded := a.ExpandInto([]agent.Memory{root})
 
-	// Walk the chain counting depth.
+	// Walk the chain, pinning Depth at every hop so an off-by-one at any
+	// level other than the deepest one would be caught.
 	node := expanded[0]
-	depth := 0
-	for len(node.Imports) == 1 {
+	for i := 1; i <= claudecode.MaxImportDepth(); i++ {
+		if len(node.Imports) != 1 {
+			t.Fatalf("hop %d: want 1 import, got %d: %+v", i, len(node.Imports), node)
+		}
 		node = node.Imports[0]
-		depth++
+		if node.Depth != i {
+			t.Errorf("node at hop %d has Depth = %d, want %d", i, node.Depth, i)
+		}
 	}
-	if depth != claudecode.MaxImportDepth() {
-		t.Errorf("expanded %d hops, want %d", depth, claudecode.MaxImportDepth())
+
+	// node is now the file at maxImportDepth (four.md). Its import (five.md)
+	// is recorded, past the limit, and not expanded.
+	if len(node.Imports) != 1 {
+		t.Fatalf("want the depth-limit file to record its dropped import, got %d imports", len(node.Imports))
 	}
-	if len(node.Warnings) == 0 {
-		t.Errorf("deepest node should warn that further imports are dropped: %+v", node)
+	dropped := node.Imports[0]
+	if dropped.Depth != claudecode.MaxImportDepth()+1 {
+		t.Errorf("dropped import Depth = %d, want %d", dropped.Depth, claudecode.MaxImportDepth()+1)
+	}
+	if len(dropped.Warnings) == 0 {
+		t.Errorf("dropped import should warn that the depth limit is exceeded: %+v", dropped)
+	}
+	if len(dropped.Imports) != 0 {
+		t.Errorf("dropped import's own @six.md must never be read: %+v", dropped)
+	}
+}
+
+func TestExpandImportsDiamondIsNotACycle(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two sibling branches import the same file: a diamond, not a cycle.
+	write("CLAUDE.md", "@left.md\n@right.md\n")
+	write("left.md", "@shared.md\n")
+	write("right.md", "@shared.md\n")
+	write("shared.md", "shared content\n")
+
+	a := claudecode.NewAgent(claudecode.Paths{CWD: dir, UserHomeDir: dir})
+	root := claudecode.ReadMemoryFile(filepath.Join(dir, "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch)
+	expanded := a.ExpandInto([]agent.Memory{root})
+
+	if len(expanded[0].Imports) != 2 {
+		t.Fatalf("want 2 imports, got %d", len(expanded[0].Imports))
+	}
+	for _, branch := range expanded[0].Imports {
+		if len(branch.Imports) != 1 {
+			t.Fatalf("branch %q should import shared.md once, got %d", branch.Path, len(branch.Imports))
+		}
+		shared := branch.Imports[0]
+		if !shared.Exists || len(shared.Imports) != 0 {
+			t.Errorf("shared.md under %q should be expanded normally: %+v", branch.Path, shared)
+		}
+		if len(shared.Warnings) != 0 {
+			t.Errorf("shared.md reached via two siblings is a diamond, not a cycle, and must not warn: %+v", shared)
+		}
 	}
 }
 

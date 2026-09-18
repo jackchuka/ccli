@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -219,13 +220,10 @@ func parseImports(content string) []string {
 // top-level file that began the chain: project-scope chains get their
 // outside-the-working-directory imports flagged, because Claude Code gates
 // those behind a one-time approval dialog, while user-scope files are trusted.
+// seen holds only this branch's ancestors, not the whole tree, so a diamond
+// (two branches importing the same file) is not mistaken for a cycle.
 func (a *Agent) expandImports(parent *agent.Memory, rootScope agent.Scope, depth int, seen map[string]bool) {
 	if parent.Path == "" || !parent.Exists {
-		return
-	}
-	if depth > maxImportDepth {
-		parent.Warnings = append(parent.Warnings,
-			"imports below this file exceed the 4-hop limit and are not loaded")
 		return
 	}
 
@@ -253,14 +251,23 @@ func (a *Agent) expandImports(parent *agent.Memory, rootScope agent.Scope, depth
 				"import resolves outside the working directory and needs one-time approval")
 		}
 
-		if seen[resolved] {
-			child.Warnings = append(child.Warnings, "already imported earlier in the chain")
-			parent.Imports = append(parent.Imports, child)
-			continue
+		switch {
+		case depth > maxImportDepth:
+			// The parent itself loaded; this is the import that would exceed the
+			// hop limit, so it is recorded but never read or recursed into.
+			child.Warnings = append(child.Warnings,
+				fmt.Sprintf("import exceeds the %d-hop depth limit and is not loaded", maxImportDepth))
+		case seen[resolved]:
+			child.Warnings = append(child.Warnings, "import is one of its own ancestors, forming a cycle")
+		default:
+			next := make(map[string]bool, len(seen)+1)
+			for k := range seen {
+				next[k] = true
+			}
+			next[resolved] = true
+			a.expandImports(&child, rootScope, depth+1, next)
 		}
-		seen[resolved] = true
 
-		a.expandImports(&child, rootScope, depth+1, seen)
 		parent.Imports = append(parent.Imports, child)
 	}
 }
