@@ -716,3 +716,212 @@ func TestOnDemandSubdirFiles(t *testing.T) {
 		t.Errorf("CLAUDE.local.md should be local-scope claude-local-md: %+v", got[1])
 	}
 }
+
+func TestListMemoryReport(t *testing.T) {
+	_, paths := memoryFixture(t)
+	a := claudecode.NewAgent(paths)
+
+	report, err := a.ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+	if report.LaunchFiles == 0 {
+		t.Error("LaunchFiles = 0")
+	}
+	if report.LaunchLines == 0 || report.LaunchBytes == 0 {
+		t.Errorf("totals not summed: %dL %dB", report.LaunchLines, report.LaunchBytes)
+	}
+	if !report.AutoMemoryEnabled {
+		t.Error("AutoMemoryEnabled should default to true")
+	}
+	if report.AutoMemoryDir == "" {
+		t.Error("AutoMemoryDir should be resolved even when the directory is absent")
+	}
+
+	// The fixture has a subdirectory CLAUDE.md at pkg/api, but the working
+	// directory IS pkg/api, so it is launch tier, not on-demand.
+	for _, f := range report.Files {
+		if f.Tier == agent.MemoryTierOnDemand && f.Exists {
+			t.Errorf("unexpected on-demand file %q", f.Path)
+		}
+	}
+}
+
+func TestListMemoryTotalsSkipExcludedAndOnDemand(t *testing.T) {
+	root := t.TempDir()
+	claudeHome := filepath.Join(root, "home", ".claude")
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(claudeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := filepath.Join(claudeHome, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"claudeMdExcludes":["**/repo/CLAUDE.md"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("excluded\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "pkg", "CLAUDE.md"), []byte("on demand\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		SettingsFile: settings,
+		HomeDir:      claudeHome,
+		UserHomeDir:  filepath.Join(root, "home"),
+		CWD:          repo,
+	})
+	report, err := a.ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	if report.LaunchFiles != 0 {
+		t.Errorf("LaunchFiles = %d, want 0: the only launch file is excluded", report.LaunchFiles)
+	}
+	if report.OnDemandFiles != 1 {
+		t.Errorf("OnDemandFiles = %d, want 1", report.OnDemandFiles)
+	}
+	if len(report.Warnings) == 0 {
+		t.Error("the exclusion should surface as a report warning")
+	}
+}
+
+func TestListMemoryWarnsOnOversizedFiles(t *testing.T) {
+	root := t.TempDir()
+	claudeHome := filepath.Join(root, "home", ".claude")
+	memDir := filepath.Join(root, "mem")
+	if err := os.MkdirAll(claudeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := filepath.Join(claudeHome, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"autoMemoryDirectory":"`+memDir+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 201 lines: one past the MEMORY.md load cutoff.
+	if err := os.WriteFile(filepath.Join(memDir, "MEMORY.md"), []byte(strings.Repeat("entry\n", 201)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 250 lines: past the CLAUDE.md advisory limit.
+	if err := os.WriteFile(filepath.Join(claudeHome, "CLAUDE.md"), []byte(strings.Repeat("rule\n", 250)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		SettingsFile: settings,
+		HomeDir:      claudeHome,
+		UserHomeDir:  filepath.Join(root, "home"),
+		CWD:          root,
+	})
+	report, err := a.ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	var sawIndex, sawAdvisory bool
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		for _, w := range f.Warnings {
+			if f.Kind == agent.MemoryKindAutoIndex && strings.Contains(w, "200") {
+				sawIndex = true
+			}
+			if f.Kind == agent.MemoryKindClaudeMD && strings.Contains(w, "200") {
+				sawAdvisory = true
+			}
+		}
+	}
+	if !sawIndex {
+		t.Error("MEMORY.md over 200 lines did not warn")
+	}
+	if !sawAdvisory {
+		t.Error("CLAUDE.md over 200 lines did not warn")
+	}
+}
+
+func TestAnnotateWarningsSizeLimits(t *testing.T) {
+	tests := []struct {
+		name     string
+		memory   agent.Memory
+		wantSnip string
+	}{
+		{
+			name:     "MEMORY.md past the 25KB cutoff",
+			memory:   agent.Memory{Kind: agent.MemoryKindAutoIndex, Exists: true, Lines: 10, Bytes: 25*1024 + 1},
+			wantSnip: "25600",
+		},
+		{
+			name:     "CLAUDE.md over 4 MiB is skipped entirely",
+			memory:   agent.Memory{Kind: agent.MemoryKindClaudeMD, Exists: true, Lines: 10, Bytes: 4<<20 + 1},
+			wantSnip: "4 MiB",
+		},
+		{
+			name:     "an excluded file gets no size warning",
+			memory:   agent.Memory{Kind: agent.MemoryKindClaudeMD, Exists: true, Lines: 900, Excluded: true},
+			wantSnip: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.memory
+			claudecode.AnnotateWarnings(&m)
+			joined := strings.Join(m.Warnings, " | ")
+			if tt.wantSnip == "" {
+				if joined != "" {
+					t.Errorf("want no warnings, got %q", joined)
+				}
+				return
+			}
+			if !strings.Contains(joined, tt.wantSnip) {
+				t.Errorf("warnings %q missing %q", joined, tt.wantSnip)
+			}
+		})
+	}
+}
+
+func TestGetMemory(t *testing.T) {
+	_, paths := memoryFixture(t)
+	a := claudecode.NewAgent(paths)
+
+	t.Run("by scope name", func(t *testing.T) {
+		m, err := a.GetMemory("personal")
+		if err != nil {
+			t.Fatalf("GetMemory: %v", err)
+		}
+		if m.Scope != agent.ScopePersonal {
+			t.Errorf("scope = %q", m.Scope)
+		}
+	})
+
+	t.Run("user is an alias for personal", func(t *testing.T) {
+		m, err := a.GetMemory("user")
+		if err != nil {
+			t.Fatalf("GetMemory: %v", err)
+		}
+		if m.Scope != agent.ScopePersonal {
+			t.Errorf("scope = %q, want %q", m.Scope, agent.ScopePersonal)
+		}
+	})
+
+	t.Run("by path suffix", func(t *testing.T) {
+		m, err := a.GetMemory("CLAUDE.local.md")
+		if err != nil {
+			t.Fatalf("GetMemory: %v", err)
+		}
+		if filepath.Base(m.Path) != "CLAUDE.local.md" {
+			t.Errorf("path = %q", m.Path)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		if _, err := a.GetMemory("nope.md"); err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+}
