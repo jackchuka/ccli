@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackchuka/ccli/internal/agent"
 	"github.com/jackchuka/ccli/internal/output"
@@ -93,12 +94,12 @@ func renderMemoryList(p *output.Printer, report *agent.MemoryReport, home, cwd s
 	if err := p.PrintText(""); err != nil {
 		return err
 	}
-	if err := p.PrintText(output.RenderDim(fmt.Sprintf("  loaded at launch: %d files · %dL · %s",
-		report.LaunchFiles, report.LaunchLines, output.FormatBytes(report.LaunchBytes)), noColor)); err != nil {
+	if err := p.PrintText(output.RenderDim(fmt.Sprintf("  loaded at launch: %d %s · %dL · %s",
+		report.LaunchFiles, pluralize(report.LaunchFiles, "file"), report.LaunchLines, output.FormatBytes(report.LaunchBytes)), noColor)); err != nil {
 		return err
 	}
-	if err := p.PrintText(output.RenderDim(fmt.Sprintf("  on demand:        %d files",
-		report.OnDemandFiles), noColor)); err != nil {
+	if err := p.PrintText(output.RenderDim(fmt.Sprintf("  on demand:        %d %s",
+		report.OnDemandFiles, pluralize(report.OnDemandFiles, "file")), noColor)); err != nil {
 		return err
 	}
 
@@ -109,11 +110,18 @@ func renderMemoryList(p *output.Printer, report *agent.MemoryReport, home, cwd s
 		if err := p.PrintText(output.RenderDivider("On demand", noColor)); err != nil {
 			return err
 		}
+		found := false
 		for _, f := range report.Files {
 			if f.Tier != agent.MemoryTierOnDemand {
 				continue
 			}
+			found = true
 			if err := renderMemoryNode(p, f, home, cwd, 0); err != nil {
+				return err
+			}
+		}
+		if !found {
+			if err := p.PrintText(output.RenderDim("  (none)", noColor)); err != nil {
 				return err
 			}
 		}
@@ -135,6 +143,11 @@ func renderMemoryList(p *output.Printer, report *agent.MemoryReport, home, cwd s
 	return nil
 }
 
+// nameColWidth is the fixed rune width of the name column. Both top-level
+// and nested rows pad or elide into this width so the size columns that
+// follow line up regardless of how deep or long a path is.
+const nameColWidth = 44
+
 // renderMemoryNode prints one file and, indented beneath it, the files it
 // imports. Import rows leave the bullet and scope columns blank so the size
 // columns stay aligned with their parent.
@@ -147,15 +160,21 @@ func renderMemoryNode(p *output.Printer, m agent.Memory, home, cwd string, depth
 	}
 
 	bullet, scope := " ", ""
-	name := memoryDisplayPath(m.Path, home, cwd)
+	display := memoryDisplayPath(m.Path, home, cwd)
+	marker := ""
 	if depth == 0 {
 		bullet = output.RenderScopeBullet(string(m.Scope), noColor)
 		scope = string(m.Scope)
 	} else {
-		name = strings.Repeat("   ", depth+1) + "└─ @" + name
+		// The tree structure already signals nesting, so the leading "./"
+		// that top-level rows show would be redundant here.
+		display = strings.TrimPrefix(display, "./")
+		marker = strings.Repeat("   ", depth+1) + "└─ @"
 	}
+	budget := nameColWidth - utf8.RuneCountInString(marker)
+	name := marker + elideMiddlePath(display, budget)
 
-	line := fmt.Sprintf("  %s %-9s %-44s %s", bullet, scope, name, size)
+	line := fmt.Sprintf("  %s %-9s %-*s %s", bullet, scope, nameColWidth, name, size)
 	if m.LinkTarget != "" {
 		line += output.RenderDim("  ⇢ "+memoryDisplayPath(m.LinkTarget, home, cwd), noColor)
 	}
@@ -222,6 +241,54 @@ func renderMemoryGet(p *output.Printer, m *agent.Memory, home, cwd string) error
 		}
 	}
 	return nil
+}
+
+// pluralize returns singular unmodified for a count of 1, and with a
+// trailing "s" otherwise, for count labels like "3 files".
+func pluralize(n int, singular string) string {
+	if n == 1 {
+		return singular
+	}
+	return singular + "s"
+}
+
+// elideMiddlePath shortens a display path to fit within width runes,
+// keeping the leading "./" or "~/" marker and the full basename intact —
+// the basename is what a reader scans for, and the fixed-width name column
+// is what lets this command render a tree instead of a table. When there
+// is no directory component to elide, the path is returned unshortened
+// rather than cutting into the basename.
+func elideMiddlePath(path string, width int) string {
+	if utf8.RuneCountInString(path) <= width {
+		return path
+	}
+
+	prefix := ""
+	rest := path
+	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "~/") {
+		prefix, rest = path[:2], path[2:]
+	}
+
+	dir, base := filepath.Split(rest)
+	if dir == "" {
+		return path
+	}
+
+	const ellipsis = "…"
+	tail := ellipsis + "/" + base
+	minimal := prefix + tail
+	minimalLen := utf8.RuneCountInString(minimal)
+	if minimalLen >= width {
+		return minimal
+	}
+
+	headBudget := width - minimalLen
+	dirRunes := []rune(dir)
+	if headBudget > len(dirRunes) {
+		headBudget = len(dirRunes)
+	}
+	head := strings.TrimRight(string(dirRunes[:headBudget]), "/")
+	return prefix + head + tail
 }
 
 // memoryDisplayPath shortens a path for display: inside the working
