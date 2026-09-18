@@ -83,6 +83,98 @@ func globMatch(pattern, path string) bool {
 	return re.MatchString(path)
 }
 
+// launchTierFiles returns every memory file Claude Code loads at session
+// start, in the order it concatenates them: broadest scope first, so the most
+// specific instruction is read last.
+func (a *Agent) launchTierFiles(s *MergedSettings) []agent.Memory {
+	var files []agent.Memory
+
+	// 1. Managed policy CLAUDE.md, then the inline claudeMd string.
+	if a.paths.ManagedPolicyFile != "" {
+		if m := readMemoryFile(a.paths.ManagedPolicyFile, agent.ScopeManaged, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch); m.Exists {
+			files = append(files, m)
+		}
+	}
+	if s.ClaudeMd != "" {
+		files = append(files, agent.Memory{
+			Scope:  agent.ScopeManaged,
+			Kind:   agent.MemoryKindManagedInline,
+			Tier:   agent.MemoryTierLaunch,
+			Exists: true,
+			Lines:  len(strings.Split(strings.TrimRight(s.ClaudeMd, "\n"), "\n")),
+			Bytes:  int64(len(s.ClaudeMd)),
+		})
+	}
+
+	// 2. User CLAUDE.md. Reported even when absent: /memory lists the location.
+	if a.paths.HomeDir != "" {
+		files = append(files, readMemoryFile(
+			filepath.Join(a.paths.HomeDir, "CLAUDE.md"),
+			agent.ScopePersonal, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch))
+	}
+
+	// 3. Ancestor directories, filesystem root down to the working directory,
+	// excluding the working directory itself, which step 4 handles.
+	ancestors := ancestorDirs(a.paths.CWD)
+	for _, dir := range ancestors[:max(0, len(ancestors)-1)] {
+		files = append(files, existingOnly(
+			readMemoryFile(filepath.Join(dir, "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch),
+			readMemoryFile(filepath.Join(dir, "CLAUDE.local.md"), agent.ScopeLocal, agent.MemoryKindClaudeLocalMD, agent.MemoryTierLaunch),
+		)...)
+	}
+
+	// 4. The working directory: ./CLAUDE.md, ./.claude/CLAUDE.md, ./CLAUDE.local.md.
+	if a.paths.CWD != "" {
+		files = append(files,
+			readMemoryFile(filepath.Join(a.paths.CWD, "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch),
+			readMemoryFile(filepath.Join(a.paths.CWD, ".claude", "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch),
+			readMemoryFile(filepath.Join(a.paths.CWD, "CLAUDE.local.md"), agent.ScopeLocal, agent.MemoryKindClaudeLocalMD, agent.MemoryTierLaunch),
+		)
+	}
+
+	return files
+}
+
+// ancestorDirs returns dir and every directory above it, ordered from the
+// filesystem root down to dir.
+func ancestorDirs(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	var chain []string
+	for {
+		chain = append(chain, dir)
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	// Reverse: root first.
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain
+}
+
+// existingOnly filters out absent files. Ancestor and subdirectory locations
+// are only interesting when a file is actually there, unlike the user,
+// project, and local paths, which are reported either way.
+func existingOnly(files ...agent.Memory) []agent.Memory {
+	var out []agent.Memory
+	for _, f := range files {
+		if f.Exists {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// LaunchTierFiles exposes launchTierFiles for tests, loading settings itself.
+func (a *Agent) LaunchTierFiles() []agent.Memory {
+	return a.launchTierFiles(LoadMergedSettings(a.paths))
+}
+
 // ReadMemoryFile exposes readMemoryFile for tests.
 func ReadMemoryFile(path string, scope agent.Scope, kind agent.MemoryKind, tier agent.MemoryTier) agent.Memory {
 	return readMemoryFile(path, scope, kind, tier)

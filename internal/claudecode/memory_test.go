@@ -3,6 +3,7 @@ package claudecode_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jackchuka/ccli/internal/agent"
@@ -105,4 +106,165 @@ func TestReadMemoryFile(t *testing.T) {
 			t.Errorf("Lines = %d, want 2", m.Lines)
 		}
 	})
+}
+
+// memoryFixture builds a working tree with memory files at several levels and
+// returns the root plus a Paths pointing at a nested working directory.
+func memoryFixture(t *testing.T) (string, claudecode.Paths) {
+	t.Helper()
+	root := t.TempDir()
+
+	home := filepath.Join(root, "home")
+	claudeHome := filepath.Join(home, ".claude")
+	repo := filepath.Join(root, "repo")
+	sub := filepath.Join(repo, "pkg", "api")
+	for _, d := range []string{claudeHome, filepath.Join(repo, ".claude"), sub} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write := func(path, body string) {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(claudeHome, "CLAUDE.md"), "user rules\n")
+	write(filepath.Join(repo, "CLAUDE.md"), "repo rules\n")
+	write(filepath.Join(repo, "CLAUDE.local.md"), "repo local\n")
+	write(filepath.Join(repo, ".claude", "CLAUDE.md"), "dot claude rules\n")
+	write(filepath.Join(sub, "CLAUDE.md"), "api rules\n")
+
+	return root, claudecode.Paths{
+		SettingsFile: filepath.Join(claudeHome, "settings.json"),
+		HomeDir:      claudeHome,
+		UserHomeDir:  home,
+		CWD:          sub,
+		ProjectDir:   filepath.Join(sub, ".claude"),
+	}
+}
+
+func TestLaunchTierOrdering(t *testing.T) {
+	_, paths := memoryFixture(t)
+	a := claudecode.NewAgent(paths)
+
+	files := a.LaunchTierFiles()
+
+	var present []string
+	for _, f := range files {
+		if f.Exists {
+			present = append(present, f.Path)
+		}
+	}
+	if len(present) < 4 {
+		t.Fatalf("expected at least 4 existing launch files, got %v", present)
+	}
+
+	// Personal comes before anything in the repo.
+	if !strings.Contains(present[0], filepath.Join(".claude", "CLAUDE.md")) {
+		t.Errorf("first launch file = %q, want the user CLAUDE.md", present[0])
+	}
+	// Ancestors are ordered root -> cwd, so repo/CLAUDE.md precedes pkg/api/CLAUDE.md.
+	repoIdx, apiIdx := -1, -1
+	for i, p := range present {
+		if strings.HasSuffix(p, filepath.Join("repo", "CLAUDE.md")) {
+			repoIdx = i
+		}
+		if strings.HasSuffix(p, filepath.Join("api", "CLAUDE.md")) {
+			apiIdx = i
+		}
+	}
+	if repoIdx < 0 || apiIdx < 0 || repoIdx > apiIdx {
+		t.Errorf("ancestor order wrong: repo at %d, api at %d", repoIdx, apiIdx)
+	}
+}
+
+func TestLaunchTierLocalAfterMain(t *testing.T) {
+	_, paths := memoryFixture(t)
+	a := claudecode.NewAgent(paths)
+
+	mainIdx, localIdx := -1, -1
+	for i, f := range a.LaunchTierFiles() {
+		if strings.HasSuffix(f.Path, filepath.Join("repo", "CLAUDE.md")) {
+			mainIdx = i
+		}
+		if strings.HasSuffix(f.Path, "CLAUDE.local.md") && f.Exists {
+			localIdx = i
+		}
+	}
+	if mainIdx < 0 || localIdx < 0 || mainIdx > localIdx {
+		t.Errorf("CLAUDE.local.md must follow CLAUDE.md in the same directory: %d vs %d", mainIdx, localIdx)
+	}
+}
+
+func TestLaunchTierFindsBothProjectLocations(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("root\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".claude", "CLAUDE.md"), []byte("dot claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{UserHomeDir: root, CWD: root})
+
+	var found []string
+	for _, f := range a.LaunchTierFiles() {
+		if f.Exists {
+			found = append(found, f.Path)
+		}
+	}
+	if len(found) != 2 {
+		t.Fatalf("got %v, want both ./CLAUDE.md and ./.claude/CLAUDE.md", found)
+	}
+	// ./CLAUDE.md is listed before ./.claude/CLAUDE.md.
+	if filepath.Dir(found[0]) != root {
+		t.Errorf("first = %q, want the root CLAUDE.md", found[0])
+	}
+}
+
+func TestLaunchTierReportsAbsentExpectedPaths(t *testing.T) {
+	root := t.TempDir()
+	a := claudecode.NewAgent(claudecode.Paths{
+		HomeDir:     filepath.Join(root, "home", ".claude"),
+		UserHomeDir: filepath.Join(root, "home"),
+		CWD:         root,
+	})
+	var absent int
+	for _, f := range a.LaunchTierFiles() {
+		if !f.Exists {
+			absent++
+		}
+	}
+	if absent == 0 {
+		t.Error("expected absent user/project/local paths to be reported")
+	}
+}
+
+func TestLaunchTierManagedInline(t *testing.T) {
+	dir := t.TempDir()
+	managed := filepath.Join(dir, "managed-settings.json")
+	if err := os.WriteFile(managed, []byte(`{"claudeMd":"Never push to main."}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := claudecode.NewAgent(claudecode.Paths{
+		ManagedSettingsFile: managed,
+		UserHomeDir:         dir,
+		CWD:                 dir,
+	})
+	found := false
+	for _, f := range a.LaunchTierFiles() {
+		if f.Kind == agent.MemoryKindManagedInline {
+			found = true
+			if f.Scope != agent.ScopeManaged || !f.Exists || f.Lines != 1 {
+				t.Errorf("managed inline entry wrong: %+v", f)
+			}
+		}
+	}
+	if !found {
+		t.Error("managed claudeMd string not reported")
+	}
 }
