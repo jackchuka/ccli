@@ -52,15 +52,30 @@ func (a *Agent) ListMemory() (*agent.MemoryReport, error) {
 }
 
 // markAutoMemoryDisabled warns on the auto memory index when the setting
-// turns auto memory off. summarize excludes MemoryKindAutoIndex and
-// MemoryKindAutoTopic entries from the totals in that case, since Claude
-// Code never loads either when the setting is disabled.
+// turns auto memory off, and cascades the same reason onto its import
+// subtree: summarize's ancestor-aware walk already stops those imports from
+// counting, but without a warning of their own a user would see them go
+// silent with no explanation.
 func markAutoMemoryDisabled(files []agent.Memory) {
 	for i := range files {
 		if files[i].Kind == agent.MemoryKindAutoIndex {
 			files[i].Warnings = append(files[i].Warnings,
 				"auto memory is disabled in settings, so it does not load")
+			warnAutoMemoryDisabledSubtree(files[i].Imports, files[i].Path)
 		}
+	}
+}
+
+// warnAutoMemoryDisabledSubtree cascades the auto-memory-disabled warning
+// onto every import beneath a disabled MEMORY.md, mirroring
+// excludeImportSubtree: the setting stops the index from loading, so nothing
+// it imports loads either.
+func warnAutoMemoryDisabledSubtree(imports []agent.Memory, importerPath string) {
+	for i := range imports {
+		imp := &imports[i]
+		imp.Warnings = append(imp.Warnings,
+			fmt.Sprintf("not loaded: imported by %s, whose auto memory is disabled", importerPath))
+		warnAutoMemoryDisabledSubtree(imp.Imports, imp.Path)
 	}
 }
 
@@ -131,29 +146,49 @@ func annotateWarnings(m *agent.Memory) {
 }
 
 // summarize fills the report's counts and hoists every file warning, labeled
-// with the file it came from.
+// with the file it came from. An import inherits its parent's tier and kind
+// but not the parent's own failure to load, so summarize walks the tree
+// instead of flattening it, carrying down whether any ancestor already
+// failed: Claude Code never reads a failed parent, so nothing beneath it
+// loads either, no matter how healthy that import looks in isolation.
 func summarize(report *agent.MemoryReport) {
-	for _, m := range flattenMemory(report.Files) {
-		autoDisabled := !report.AutoMemoryEnabled &&
-			(m.Kind == agent.MemoryKindAutoIndex || m.Kind == agent.MemoryKindAutoTopic)
-		switch {
-		case m.Excluded, !m.Exists, autoDisabled:
-			// Counted nowhere: it does not load.
-		case m.Tier == agent.MemoryTierLaunch:
-			report.LaunchFiles++
-			report.LaunchLines += m.Lines
-			report.LaunchBytes += m.Bytes
-		case m.Tier == agent.MemoryTierOnDemand:
-			report.OnDemandFiles++
-		}
+	for i := range report.Files {
+		summarizeNode(report, &report.Files[i], false)
+	}
+}
 
-		label := m.Path
-		if label == "" {
-			label = "managed claudeMd (inline)"
-		}
-		for _, w := range m.Warnings {
-			report.Warnings = append(report.Warnings, label+": "+w)
-		}
+// summarizeNode counts m toward the report's totals only when m and every
+// ancestor above it actually load, but always hoists m's own warnings —
+// every file's warnings surface whether or not it loads, since that is the
+// point of the audit — and recurses into m's imports with the combined
+// failure state.
+func summarizeNode(report *agent.MemoryReport, m *agent.Memory, ancestorFailed bool) {
+	autoDisabled := !report.AutoMemoryEnabled &&
+		(m.Kind == agent.MemoryKindAutoIndex || m.Kind == agent.MemoryKindAutoTopic)
+	failed := m.Excluded || !m.Exists || autoDisabled
+
+	switch {
+	case ancestorFailed, failed:
+		// Counted nowhere: it does not load, and neither does anything
+		// beneath it.
+	case m.Tier == agent.MemoryTierLaunch:
+		report.LaunchFiles++
+		report.LaunchLines += m.Lines
+		report.LaunchBytes += m.Bytes
+	case m.Tier == agent.MemoryTierOnDemand:
+		report.OnDemandFiles++
+	}
+
+	label := m.Path
+	if label == "" {
+		label = "managed claudeMd (inline)"
+	}
+	for _, w := range m.Warnings {
+		report.Warnings = append(report.Warnings, label+": "+w)
+	}
+
+	for i := range m.Imports {
+		summarizeNode(report, &m.Imports[i], ancestorFailed || failed)
 	}
 }
 

@@ -979,6 +979,72 @@ func TestListMemoryAutoMemoryDisabledDoesNotCount(t *testing.T) {
 	}
 }
 
+func TestListMemoryAutoMemoryDisabledImportContributesZero(t *testing.T) {
+	// Neutralize the auto-memory env pair so this test never resolves to a
+	// real Claude Code memory directory on the machine running the test.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
+	root := t.TempDir()
+	claudeHome := filepath.Join(root, "home", ".claude")
+	memDir := filepath.Join(root, "mem")
+	if err := os.MkdirAll(claudeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := filepath.Join(claudeHome, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"autoMemoryEnabled":false,"autoMemoryDirectory":"`+memDir+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeHome, "CLAUDE.md"), []byte(strings.Repeat("rule\n", 250)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// MEMORY.md imports a large file. Disabling auto memory has to stop the
+	// import from loading too, not just the index itself: an import
+	// inherits the index's launch tier, not its disabled state, unless the
+	// counting walk carries that state down explicitly.
+	if err := os.WriteFile(filepath.Join(memDir, "MEMORY.md"), []byte("@extra.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "extra.md"), []byte(strings.Repeat("line\n", 300)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		SettingsFile: settings,
+		HomeDir:      claudeHome,
+		UserHomeDir:  filepath.Join(root, "home"),
+		CWD:          root,
+	})
+	report, err := a.ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	if report.LaunchFiles != 1 {
+		t.Errorf("LaunchFiles = %d, want 1: extra.md must not count when its importer's auto memory is disabled", report.LaunchFiles)
+	}
+	if report.LaunchLines != 250 {
+		t.Errorf("LaunchLines = %d, want 250: extra.md's 300 lines must not count", report.LaunchLines)
+	}
+
+	var extraWarned bool
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		if filepath.Base(f.Path) == "extra.md" {
+			for _, w := range f.Warnings {
+				if strings.Contains(w, "disabled") {
+					extraWarned = true
+				}
+			}
+		}
+	}
+	if !extraWarned {
+		t.Error("extra.md should warn that it does not load because its importer's auto memory is disabled")
+	}
+}
+
 func TestListMemoryTotalsExactArithmetic(t *testing.T) {
 	// Neutralize the auto-memory env pair so this test never resolves to a
 	// real Claude Code memory directory on the machine running the test.
@@ -1070,6 +1136,11 @@ func TestAnnotateWarningsSizeLimits(t *testing.T) {
 		{
 			name:     "CLAUDE.md at exactly 200 lines does not warn",
 			memory:   agent.Memory{Kind: agent.MemoryKindClaudeMD, Exists: true, Lines: 200, Bytes: 10},
+			wantSnip: "",
+		},
+		{
+			name:     "MEMORY.md at exactly 200 lines does not warn",
+			memory:   agent.Memory{Kind: agent.MemoryKindAutoIndex, Exists: true, Lines: 200, Bytes: 10},
 			wantSnip: "",
 		},
 	}

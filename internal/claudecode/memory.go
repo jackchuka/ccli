@@ -322,8 +322,8 @@ func applyExclusions(files []agent.Memory, patterns []string, home string) {
 // excluded file: Claude Code never reads an excluded parent, so its imports
 // never load either, regardless of whether they individually match a
 // pattern. ExcludedBy carries the pattern that caused the cascade, while the
-// warning names the importer so the reason is legible without following the
-// chain back up.
+// warning names the direct importer, not the original excluded file, so a
+// depth-2 import's warning correctly names the file that imported it.
 func excludeImportSubtree(imports []agent.Memory, importerPath, importerPattern string) {
 	for i := range imports {
 		imp := &imports[i]
@@ -331,7 +331,7 @@ func excludeImportSubtree(imports []agent.Memory, importerPath, importerPattern 
 		imp.ExcludedBy = importerPattern
 		imp.Warnings = append(imp.Warnings,
 			fmt.Sprintf("not loaded: imported by %s, which is excluded", importerPath))
-		excludeImportSubtree(imp.Imports, importerPath, importerPattern)
+		excludeImportSubtree(imp.Imports, imp.Path, importerPattern)
 	}
 }
 
