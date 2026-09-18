@@ -145,7 +145,9 @@ func LoadMergedSettings(p Paths) *MergedSettings {
 		if s.AutoMemoryEnabled != nil {
 			merged.AutoMemoryEnabled = *s.AutoMemoryEnabled
 		}
-		if s.ClaudeMd != "" {
+		// claudeMd only takes effect in managed/policy settings; Claude Code
+		// ignores it in user, project, and local settings.
+		if path == p.ManagedSettingsFile && s.ClaudeMd != "" {
 			merged.ClaudeMd = s.ClaudeMd
 		}
 	}

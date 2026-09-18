@@ -12,11 +12,11 @@ import (
 // Thresholds Claude Code documents for memory files. Lines and bytes are the
 // units the docs use, so they are the units this audit reports.
 const (
-	memoryAdvisoryLines = 200          // per CLAUDE.md: longer files reduce adherence
-	memoryHardByteLimit = 4 << 20      // 4 MiB: Claude Code skips a larger CLAUDE.md
-	autoIndexMaxLines   = 200          // MEMORY.md: only the first 200 lines load
-	autoIndexMaxBytes   = 25 * 1024    // MEMORY.md: or the first 25KB, whichever comes first
-	maxImportDepth      = 4            // @path imports expand at most four hops
+	memoryAdvisoryLines = 200       // per CLAUDE.md: longer files reduce adherence
+	memoryHardByteLimit = 4 << 20   // 4 MiB: Claude Code skips a larger CLAUDE.md
+	autoIndexMaxLines   = 200       // MEMORY.md: only the first 200 lines load
+	autoIndexMaxBytes   = 25 * 1024 // MEMORY.md: or the first 25KB, whichever comes first
+	maxImportDepth      = 4         // @path imports expand at most four hops
 )
 
 // readMemoryFile stats and measures one memory file. A missing file is not an
@@ -101,7 +101,7 @@ func (a *Agent) launchTierFiles(s *MergedSettings) []agent.Memory {
 			Kind:   agent.MemoryKindManagedInline,
 			Tier:   agent.MemoryTierLaunch,
 			Exists: true,
-			Lines:  len(strings.Split(strings.TrimRight(s.ClaudeMd, "\n"), "\n")),
+			Lines:  countLinesIn(strings.NewReader(s.ClaudeMd)),
 			Bytes:  int64(len(s.ClaudeMd)),
 		})
 	}

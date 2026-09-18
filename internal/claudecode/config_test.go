@@ -98,6 +98,41 @@ func TestLoadMergedSettingsPrecedence(t *testing.T) {
 	}
 }
 
+func TestLoadMergedSettingsClaudeMdManagedOnly(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	t.Run("managed wins over user", func(t *testing.T) {
+		user := write("user.json", `{"claudeMd":"User instruction, never loaded."}`)
+		managed := write("managed.json", `{"claudeMd":"Managed instruction."}`)
+
+		got := claudecode.LoadMergedSettings(claudecode.Paths{
+			SettingsFile:        user,
+			ManagedSettingsFile: managed,
+		})
+		if got.ClaudeMd != "Managed instruction." {
+			t.Errorf("claudeMd = %q, want the managed value", got.ClaudeMd)
+		}
+	})
+
+	t.Run("user-only claudeMd has no effect", func(t *testing.T) {
+		user := write("user-only.json", `{"claudeMd":"User instruction, never loaded."}`)
+
+		got := claudecode.LoadMergedSettings(claudecode.Paths{
+			SettingsFile: user,
+		})
+		if got.ClaudeMd != "" {
+			t.Errorf("claudeMd = %q, want empty since only user settings set it", got.ClaudeMd)
+		}
+	})
+}
+
 func TestLoadMergedSettingsDefaults(t *testing.T) {
 	got := claudecode.LoadMergedSettings(claudecode.Paths{})
 	if !got.AutoMemoryEnabled {
