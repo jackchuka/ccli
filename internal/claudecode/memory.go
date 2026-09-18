@@ -1,7 +1,6 @@
 package claudecode
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,24 +37,8 @@ func readMemoryFile(path string, scope agent.Scope, kind agent.MemoryKind, tier 
 	}
 	m.Exists = true
 	m.Bytes = info.Size()
-	m.Lines = countFileLines(path)
+	m.Lines = countLines(path)
 	return m
-}
-
-// countFileLines counts lines, including a final line with no trailing newline.
-func countFileLines(path string) int {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0
-	}
-	defer f.Close() //nolint:errcheck // read-only file
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4<<20)
-	n := 0
-	for scanner.Scan() {
-		n++
-	}
-	return n
 }
 
 // expandTilde resolves a leading "~/" against home. Any other value,

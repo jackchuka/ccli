@@ -117,6 +117,8 @@ func countLines(path string) int {
 	}
 	defer f.Close() //nolint:errcheck // read-only file
 	scanner := bufio.NewScanner(f)
+	// Memory files may contain a single very long line; raise the token limit to avoid truncating the count.
+	scanner.Buffer(make([]byte, 0, 64*1024), memoryHardByteLimit)
 	n := 0
 	for scanner.Scan() {
 		n++
