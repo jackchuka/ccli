@@ -22,16 +22,29 @@ const (
 // working directory: the launch tier in load order with imports nested
 // underneath, then the on-demand tier, with totals and warnings.
 func (a *Agent) ListMemory() (*agent.MemoryReport, error) {
+	return a.memoryReport(true), nil
+}
+
+// launchMemoryReport audits the launch tier alone. Discovering the on-demand
+// tier means a full recursive walk of the working directory, which dominates
+// the cost of the audit; a caller that only reads the launch totals — the
+// info dashboard — should not pay for a result it throws away. The report it
+// returns holds no on-demand files and an OnDemandFiles count of zero.
+func (a *Agent) launchMemoryReport() *agent.MemoryReport {
+	return a.memoryReport(false)
+}
+
+func (a *Agent) memoryReport(includeOnDemand bool) *agent.MemoryReport {
 	s := LoadMergedSettings(a.paths)
 
 	autoDir := a.resolveAutoMemoryDir(s)
 	autoLaunch, autoOnDemand := a.autoMemoryFiles(autoDir)
 
-	launch := a.ExpandInto(append(a.launchTierFiles(s), autoLaunch...))
-
-	onDemand := append(a.onDemandSubdirFiles(), autoOnDemand...)
-
-	files := append(launch, onDemand...)
+	files := a.ExpandInto(append(a.launchTierFiles(s), autoLaunch...))
+	if includeOnDemand {
+		files = append(files, a.onDemandSubdirFiles()...)
+		files = append(files, autoOnDemand...)
+	}
 	applyExclusions(files, s.ClaudeMdExcludes, a.paths.UserHomeDir)
 	if !s.AutoMemoryEnabled {
 		// MEMORY.md is gathered above regardless of the setting, so its
@@ -48,7 +61,7 @@ func (a *Agent) ListMemory() (*agent.MemoryReport, error) {
 		AutoMemoryDir:     autoDir,
 	}
 	summarize(report)
-	return report, nil
+	return report
 }
 
 // markAutoMemoryDisabled records that the setting stops auto memory loading,
@@ -222,3 +235,6 @@ func FlattenMemory(files []agent.Memory) []agent.Memory { return flattenMemory(f
 
 // AnnotateWarnings exposes annotateWarnings for tests.
 func AnnotateWarnings(m *agent.Memory) { annotateWarnings(m) }
+
+// LaunchMemoryReport exposes launchMemoryReport for tests.
+func (a *Agent) LaunchMemoryReport() *agent.MemoryReport { return a.launchMemoryReport() }

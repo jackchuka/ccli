@@ -85,9 +85,9 @@ func (a *Agent) Info() (*agent.InstallInfo, error) {
 	}
 
 	// Memory count: launch-tier files only, matching `ccli memory list`.
-	if report, err := a.ListMemory(); err == nil {
-		info.MemoryCount = report.LaunchFiles
-	}
+	// The launch-only audit skips the on-demand tier's recursive directory
+	// walk, which this dashboard would discard.
+	info.MemoryCount = a.launchMemoryReport().LaunchFiles
 
 	return info, nil
 }

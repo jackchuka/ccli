@@ -1420,3 +1420,37 @@ func TestListMemoryNoContradictoryWarnings(t *testing.T) {
 		t.Errorf("MEMORY.md should warn that auto memory is disabled, got %v", index.Warnings)
 	}
 }
+
+// TestLaunchMemoryReportSkipsTheOnDemandWalk pins the split that keeps `ccli
+// info` off the recursive working-directory walk: the launch totals must be
+// identical to the full audit's, and no on-demand file may be discovered.
+func TestLaunchMemoryReportSkipsTheOnDemandWalk(t *testing.T) {
+	repo, paths := memoryTestPaths(t, `{}`)
+	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMemoryFile(t, filepath.Join(repo, "CLAUDE.md"), "@notes.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "notes.md"), "one\ntwo\n")
+	writeMemoryFile(t, filepath.Join(repo, "pkg", "CLAUDE.md"), "on demand\n")
+
+	a := claudecode.NewAgent(paths)
+	full, err := a.ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+	launch := a.LaunchMemoryReport()
+
+	if launch.LaunchFiles != full.LaunchFiles || launch.LaunchLines != full.LaunchLines || launch.LaunchBytes != full.LaunchBytes {
+		t.Errorf("launch-only totals %d/%d/%d differ from the full audit's %d/%d/%d",
+			launch.LaunchFiles, launch.LaunchLines, launch.LaunchBytes,
+			full.LaunchFiles, full.LaunchLines, full.LaunchBytes)
+	}
+	if full.OnDemandFiles != 1 {
+		t.Fatalf("fixture should discover 1 on-demand file, got %d", full.OnDemandFiles)
+	}
+	for _, f := range claudecode.FlattenMemory(launch.Files) {
+		if f.Tier == agent.MemoryTierOnDemand {
+			t.Errorf("launch-only audit discovered on-demand file %q", f.Path)
+		}
+	}
+}
