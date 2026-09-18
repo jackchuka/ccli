@@ -161,25 +161,6 @@ func existingOnly(files ...agent.Memory) []agent.Memory {
 	return out
 }
 
-// LaunchTierFiles exposes launchTierFiles for tests, loading settings itself.
-func (a *Agent) LaunchTierFiles() []agent.Memory {
-	return a.launchTierFiles(LoadMergedSettings(a.paths))
-}
-
-// ReadMemoryFile exposes readMemoryFile for tests.
-func ReadMemoryFile(path string, scope agent.Scope, kind agent.MemoryKind, tier agent.MemoryTier) agent.Memory {
-	return readMemoryFile(path, scope, kind, tier)
-}
-
-// GlobMatch exposes globMatch for tests.
-func GlobMatch(pattern, path string) bool { return globMatch(pattern, path) }
-
-// ExpandTilde exposes expandTilde for tests.
-func ExpandTilde(path, home string) string { return expandTilde(path, home) }
-
-// ParseImports exposes parseImports for tests.
-func ParseImports(content string) []string { return parseImports(content) }
-
 var (
 	// importRe finds "@path" tokens at a line start or after whitespace.
 	importRe = regexp.MustCompile(`(^|\s)@(\S+)`)
@@ -292,9 +273,6 @@ func (a *Agent) ExpandInto(files []agent.Memory) []agent.Memory {
 	return files
 }
 
-// MaxImportDepth exposes maxImportDepth for tests.
-func MaxImportDepth() int { return maxImportDepth }
-
 // applyExclusions marks files matched by claudeMdExcludes. Managed policy
 // files are exempt: Claude Code does not let individual settings exclude them.
 // A file's own exclusion is decided before its imports are considered, so an
@@ -342,11 +320,6 @@ func excludeImportSubtree(imports []agent.Memory, importerPath, importerPattern 
 			fmt.Sprintf("not loaded: imported by %s, which is excluded", importerPath))
 		excludeImportSubtree(imp.Imports, imp.Path, importerPattern)
 	}
-}
-
-// ApplyExclusions exposes applyExclusions for tests.
-func ApplyExclusions(files []agent.Memory, patterns []string, home string) {
-	applyExclusions(files, patterns, home)
 }
 
 // resolveAutoMemoryDir finds the auto memory directory, mirroring Claude
@@ -426,16 +399,6 @@ func frontmatterValue(block, key string) string {
 	return ""
 }
 
-// ResolveAutoMemoryDir exposes resolveAutoMemoryDir for tests.
-func (a *Agent) ResolveAutoMemoryDir() string {
-	return a.resolveAutoMemoryDir(LoadMergedSettings(a.paths))
-}
-
-// AutoMemoryFiles exposes autoMemoryFiles for tests.
-func (a *Agent) AutoMemoryFiles(dir string) ([]agent.Memory, []agent.Memory) {
-	return a.autoMemoryFiles(dir)
-}
-
 // skippedWalkDirs are directories never worth walking for memory files.
 var skippedWalkDirs = map[string]bool{
 	".git":         true,
@@ -476,6 +439,3 @@ func (a *Agent) onDemandSubdirFiles() []agent.Memory {
 	})
 	return files
 }
-
-// OnDemandSubdirFiles exposes onDemandSubdirFiles for tests.
-func (a *Agent) OnDemandSubdirFiles() []agent.Memory { return a.onDemandSubdirFiles() }

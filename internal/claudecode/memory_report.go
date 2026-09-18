@@ -229,12 +229,3 @@ func flattenMemory(files []agent.Memory) []agent.Memory {
 	}
 	return out
 }
-
-// FlattenMemory exposes flattenMemory for tests.
-func FlattenMemory(files []agent.Memory) []agent.Memory { return flattenMemory(files) }
-
-// AnnotateWarnings exposes annotateWarnings for tests.
-func AnnotateWarnings(m *agent.Memory) { annotateWarnings(m) }
-
-// LaunchMemoryReport exposes launchMemoryReport for tests.
-func (a *Agent) LaunchMemoryReport() *agent.MemoryReport { return a.launchMemoryReport() }
