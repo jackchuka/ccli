@@ -664,3 +664,55 @@ func TestAutoMemoryFilesMissingDir(t *testing.T) {
 		t.Errorf("missing memory directory should yield nothing, got %d/%d", len(launch), len(onDemand))
 	}
 }
+
+func TestOnDemandSubdirFiles(t *testing.T) {
+	root := t.TempDir()
+	mk := func(parts ...string) string {
+		p := filepath.Join(append([]string{root}, parts...)...)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	write := func(dir, name string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(root, "CLAUDE.md") // launch tier, must not appear here
+	write(mk("pkg", "api"), "CLAUDE.md")
+	write(mk("pkg", "db"), "CLAUDE.local.md")
+	write(mk("node_modules", "dep"), "CLAUDE.md")
+	write(mk("vendor", "lib"), "CLAUDE.md")
+	write(mk(".git", "hooks"), "CLAUDE.md")
+	write(mk("pkg", "api"), "README.md") // not a memory file
+
+	a := claudecode.NewAgent(claudecode.Paths{CWD: root})
+	got := a.OnDemandSubdirFiles()
+
+	if len(got) != 2 {
+		var paths []string
+		for _, f := range got {
+			paths = append(paths, f.Path)
+		}
+		t.Fatalf("got %d files (%v), want 2", len(got), paths)
+	}
+	for _, f := range got {
+		if f.Tier != agent.MemoryTierOnDemand {
+			t.Errorf("%s tier = %q, want on-demand", f.Path, f.Tier)
+		}
+		if !f.Exists {
+			t.Errorf("%s should exist", f.Path)
+		}
+	}
+	if filepath.Base(got[0].Path) != "CLAUDE.md" {
+		t.Errorf("first file = %q", got[0].Path)
+	}
+	if got[0].Kind != agent.MemoryKindClaudeMD {
+		t.Errorf("kind = %q, want %q", got[0].Kind, agent.MemoryKindClaudeMD)
+	}
+	if got[1].Kind != agent.MemoryKindClaudeLocalMD || got[1].Scope != agent.ScopeLocal {
+		t.Errorf("CLAUDE.local.md should be local-scope claude-local-md: %+v", got[1])
+	}
+}

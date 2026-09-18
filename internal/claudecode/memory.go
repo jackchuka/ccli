@@ -412,3 +412,47 @@ func (a *Agent) ResolveAutoMemoryDir() string {
 func (a *Agent) AutoMemoryFiles(dir string) ([]agent.Memory, []agent.Memory) {
 	return a.autoMemoryFiles(dir)
 }
+
+// skippedWalkDirs are directories never worth walking for memory files.
+var skippedWalkDirs = map[string]bool{
+	".git":         true,
+	"node_modules": true,
+	"vendor":       true,
+}
+
+// onDemandSubdirFiles finds CLAUDE.md and CLAUDE.local.md below the working
+// directory. Claude Code loads these only when it reads files in those
+// directories, so they are reported separately from the launch tier.
+func (a *Agent) onDemandSubdirFiles() []agent.Memory {
+	if a.paths.CWD == "" {
+		return nil
+	}
+
+	var files []agent.Memory
+	_ = filepath.WalkDir(a.paths.CWD, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // an unreadable directory should not fail the audit
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if path != a.paths.CWD && (skippedWalkDirs[name] || strings.HasPrefix(name, ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Dir(path) == a.paths.CWD {
+			return nil // the working directory's own files are launch tier
+		}
+		switch d.Name() {
+		case "CLAUDE.md":
+			files = append(files, readMemoryFile(path, agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierOnDemand))
+		case "CLAUDE.local.md":
+			files = append(files, readMemoryFile(path, agent.ScopeLocal, agent.MemoryKindClaudeLocalMD, agent.MemoryTierOnDemand))
+		}
+		return nil
+	})
+	return files
+}
+
+// OnDemandSubdirFiles exposes onDemandSubdirFiles for tests.
+func (a *Agent) OnDemandSubdirFiles() []agent.Memory { return a.onDemandSubdirFiles() }
