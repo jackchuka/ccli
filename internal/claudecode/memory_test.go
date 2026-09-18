@@ -268,3 +268,147 @@ func TestLaunchTierManagedInline(t *testing.T) {
 		t.Error("managed claudeMd string not reported")
 	}
 }
+
+func TestParseImports(t *testing.T) {
+	content := "See @README for the overview.\n" +
+		"- git workflow @docs/git.md\n" +
+		"Mention `@notanimport` stays literal.\n" +
+		"```\n@fenced/also-literal.md\n```\n" +
+		"@~/.claude/shared.md\n"
+
+	got := claudecode.ParseImports(content)
+	want := []string{"README", "docs/git.md", "~/.claude/shared.md"}
+
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("import %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestExpandImportsNestsAndLimitsDepth(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A five-deep chain: root imports 1, 1 imports 2, ... 4 imports 5.
+	write("CLAUDE.md", "@one.md\n")
+	write("one.md", "@two.md\n")
+	write("two.md", "@three.md\n")
+	write("three.md", "@four.md\n")
+	write("four.md", "@five.md\n")
+	write("five.md", "too deep\n")
+
+	a := claudecode.NewAgent(claudecode.Paths{CWD: dir, UserHomeDir: dir})
+	root := claudecode.ReadMemoryFile(filepath.Join(dir, "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch)
+	expanded := a.ExpandInto([]agent.Memory{root})
+
+	// Walk the chain counting depth.
+	node := expanded[0]
+	depth := 0
+	for len(node.Imports) == 1 {
+		node = node.Imports[0]
+		depth++
+	}
+	if depth != claudecode.MaxImportDepth() {
+		t.Errorf("expanded %d hops, want %d", depth, claudecode.MaxImportDepth())
+	}
+	if len(node.Warnings) == 0 {
+		t.Errorf("deepest node should warn that further imports are dropped: %+v", node)
+	}
+}
+
+func TestExpandImportsResolvesRelativeToImportingFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs", "adr"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("@docs/architecture.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The nested import is relative to docs/, not to the working directory.
+	if err := os.WriteFile(filepath.Join(dir, "docs", "architecture.md"), []byte("@adr/0003.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docs", "adr", "0003.md"), []byte("decision\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{CWD: dir, UserHomeDir: dir})
+	root := claudecode.ReadMemoryFile(filepath.Join(dir, "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch)
+	expanded := a.ExpandInto([]agent.Memory{root})
+
+	if len(expanded[0].Imports) != 1 {
+		t.Fatalf("want 1 import, got %d", len(expanded[0].Imports))
+	}
+	nested := expanded[0].Imports[0]
+	if len(nested.Imports) != 1 || !nested.Imports[0].Exists {
+		t.Fatalf("nested import not resolved relative to its importer: %+v", nested)
+	}
+	if nested.Imports[0].Depth != 2 {
+		t.Errorf("nested Depth = %d, want 2", nested.Imports[0].Depth)
+	}
+}
+
+func TestExpandImportsCycleAndMissing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("@loop.md\n@gone.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "loop.md"), []byte("@CLAUDE.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{CWD: dir, UserHomeDir: dir})
+	root := claudecode.ReadMemoryFile(filepath.Join(dir, "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch)
+	expanded := a.ExpandInto([]agent.Memory{root}) // must terminate
+
+	if len(expanded[0].Imports) != 2 {
+		t.Fatalf("want 2 imports, got %d", len(expanded[0].Imports))
+	}
+	loop, gone := expanded[0].Imports[0], expanded[0].Imports[1]
+	if len(loop.Imports) != 1 || len(loop.Imports[0].Warnings) == 0 {
+		t.Errorf("cycle should be recorded once with a warning: %+v", loop)
+	}
+	if gone.Exists || len(gone.Warnings) == 0 {
+		t.Errorf("missing import should be absent and warned: %+v", gone)
+	}
+}
+
+func TestExpandImportsFlagsExternal(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	outside := filepath.Join(root, "outside")
+	for _, d := range []string{repo, outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(outside, "shared.md"), []byte("shared\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("@"+filepath.Join(outside, "shared.md")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{CWD: repo, UserHomeDir: root})
+	rootFile := claudecode.ReadMemoryFile(filepath.Join(repo, "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch)
+	expanded := a.ExpandInto([]agent.Memory{rootFile})
+
+	imp := expanded[0].Imports[0]
+	if !imp.External || len(imp.Warnings) == 0 {
+		t.Errorf("import outside the working directory should be External and warned: %+v", imp)
+	}
+
+	// A personal-scope file's imports are trusted, so they are not flagged.
+	personal := claudecode.ReadMemoryFile(filepath.Join(repo, "CLAUDE.md"), agent.ScopePersonal, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch)
+	personalExpanded := a.ExpandInto([]agent.Memory{personal})
+	if personalExpanded[0].Imports[0].External {
+		t.Error("personal-scope imports must not be flagged external")
+	}
+}

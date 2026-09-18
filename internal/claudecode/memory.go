@@ -185,3 +185,106 @@ func GlobMatch(pattern, path string) bool { return globMatch(pattern, path) }
 
 // ExpandTilde exposes expandTilde for tests.
 func ExpandTilde(path, home string) string { return expandTilde(path, home) }
+
+// ParseImports exposes parseImports for tests.
+func ParseImports(content string) []string { return parseImports(content) }
+
+var (
+	// importRe finds "@path" tokens at a line start or after whitespace.
+	importRe = regexp.MustCompile(`(^|\s)@(\S+)`)
+	// fencedRe matches fenced code blocks, whose contents are not imports.
+	fencedRe = regexp.MustCompile("(?s)```.*?```")
+	// spanRe matches inline code spans, whose contents are not imports.
+	spanRe = regexp.MustCompile("`[^`\n]*`")
+)
+
+// parseImports returns the @path imports declared in a memory file's content.
+// Import parsing skips code spans and fenced blocks, so a backticked
+// `@README` stays literal.
+func parseImports(content string) []string {
+	stripped := spanRe.ReplaceAllString(fencedRe.ReplaceAllString(content, ""), "")
+
+	var out []string
+	for _, m := range importRe.FindAllStringSubmatch(stripped, -1) {
+		p := strings.TrimRight(m[2], ".,;:!?)")
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// expandImports fills parent.Imports recursively. depth is the hop count of
+// the children being added, starting at 1. rootScope is the scope of the
+// top-level file that began the chain: project-scope chains get their
+// outside-the-working-directory imports flagged, because Claude Code gates
+// those behind a one-time approval dialog, while user-scope files are trusted.
+func (a *Agent) expandImports(parent *agent.Memory, rootScope agent.Scope, depth int, seen map[string]bool) {
+	if parent.Path == "" || !parent.Exists {
+		return
+	}
+	if depth > maxImportDepth {
+		parent.Warnings = append(parent.Warnings,
+			"imports below this file exceed the 4-hop limit and are not loaded")
+		return
+	}
+
+	data, err := os.ReadFile(parent.Path)
+	if err != nil {
+		return
+	}
+
+	for _, raw := range parseImports(string(data)) {
+		resolved := expandTilde(raw, a.paths.UserHomeDir)
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(filepath.Dir(parent.Path), resolved)
+		}
+		resolved = filepath.Clean(resolved)
+
+		child := readMemoryFile(resolved, parent.Scope, agent.MemoryKindImport, parent.Tier)
+		child.Depth = depth
+
+		if !child.Exists {
+			child.Warnings = append(child.Warnings, "import target does not exist")
+		}
+		if (rootScope == agent.ScopeProject || rootScope == agent.ScopeLocal) && !withinDir(resolved, a.paths.CWD) {
+			child.External = true
+			child.Warnings = append(child.Warnings,
+				"import resolves outside the working directory and needs one-time approval")
+		}
+
+		if seen[resolved] {
+			child.Warnings = append(child.Warnings, "already imported earlier in the chain")
+			parent.Imports = append(parent.Imports, child)
+			continue
+		}
+		seen[resolved] = true
+
+		a.expandImports(&child, rootScope, depth+1, seen)
+		parent.Imports = append(parent.Imports, child)
+	}
+}
+
+// withinDir reports whether path is dir or sits underneath it.
+func withinDir(path, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// ExpandInto expands the imports of each file in place and returns the slice.
+func (a *Agent) ExpandInto(files []agent.Memory) []agent.Memory {
+	for i := range files {
+		seen := map[string]bool{files[i].Path: true}
+		a.expandImports(&files[i], files[i].Scope, 1, seen)
+	}
+	return files
+}
+
+// MaxImportDepth exposes maxImportDepth for tests.
+func MaxImportDepth() int { return maxImportDepth }
