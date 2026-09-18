@@ -37,9 +37,12 @@ func TestRenderMemoryList(t *testing.T) {
 				Tier: agent.MemoryTierLaunch, Exists: true, Lines: 31, Bytes: 1200, LinkTarget: "/dotfiles/CLAUDE.md"},
 			{Path: "/home/u/repo/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD,
 				Tier: agent.MemoryTierLaunch, Exists: true, Lines: 88, Bytes: 3400,
+				Warnings: []string{"fine, this is just a test warning"},
 				Imports: []agent.Memory{
 					{Path: "/home/u/repo/docs/architecture.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindImport,
-						Tier: agent.MemoryTierLaunch, Exists: true, Lines: 140, Bytes: 6100, Depth: 1},
+						Tier: agent.MemoryTierLaunch, Exists: true, Lines: 140, Bytes: 6100, Depth: 1,
+						NotLoaded: true,
+						Warnings:  []string{"import is one of its own ancestors, forming a cycle"}},
 				}},
 			{Path: "/home/u/repo/CLAUDE.local.md", Scope: agent.ScopeLocal, Kind: agent.MemoryKindClaudeLocalMD,
 				Tier: agent.MemoryTierLaunch, Exists: false},
@@ -50,7 +53,6 @@ func TestRenderMemoryList(t *testing.T) {
 		LaunchLines:   259,
 		LaunchBytes:   10700,
 		OnDemandFiles: 1,
-		Warnings:      []string{"/home/u/repo/CLAUDE.md: 88 lines: fine, this is just a test warning"},
 	}
 
 	t.Run("default output", func(t *testing.T) {
@@ -84,6 +86,50 @@ func TestRenderMemoryList(t *testing.T) {
 		// The personal file loads before the project file.
 		if strings.Index(got, "~/.claude/CLAUDE.md") > strings.Index(got, "./CLAUDE.md") {
 			t.Error("load order not preserved in output")
+		}
+	})
+
+	// The tree is the point of this command, so a file's findings have to be
+	// readable against the row they belong to, not only in a trailing list
+	// keyed by a path the reader must match back by hand.
+	t.Run("warnings render inline under their file", func(t *testing.T) {
+		var buf bytes.Buffer
+		p := output.NewPrinter(&buf, output.FormatText, true)
+		if err := renderMemoryList(p, report, "/home/u", "/home/u/repo", false); err != nil {
+			t.Fatalf("renderMemoryList: %v", err)
+		}
+		got := buf.String()
+
+		// Inline means before the import row that follows the warned file,
+		// which a bottom-only summary could never satisfy.
+		inline := strings.Index(got, "this is just a test warning")
+		importRow := strings.Index(got, "└─ @docs/architecture.md")
+		if inline < 0 || importRow < 0 || inline > importRow {
+			t.Errorf("warning not rendered under its own row (warning at %d, next row at %d):\n%s", inline, importRow, got)
+		}
+		// The nested node's own warning belongs under the nested row.
+		cycle := strings.Index(got, "forming a cycle")
+		if cycle < importRow {
+			t.Errorf("import warning not rendered under the import row:\n%s", got)
+		}
+		// Warning rows indent to the name column so they read as belonging
+		// to the row above rather than as another file.
+		for _, line := range strings.Split(got, "\n") {
+			// The first match is the inline row; the trailing summary repeats
+			// the same text at its own indentation.
+			if strings.Contains(line, "this is just a test warning") {
+				if !strings.HasPrefix(line, strings.Repeat(" ", nameColStart)+"! ") {
+					t.Errorf("warning row not indented to the name column: %q", line)
+				}
+				break
+			}
+		}
+		// The summary names files the way the rows do, not by absolute path.
+		if !strings.Contains(got, "./CLAUDE.md: fine, this is just a test warning") {
+			t.Errorf("warning summary does not use the display path used by the rows:\n%s", got)
+		}
+		if strings.Contains(got, "/home/u/repo/CLAUDE.md:") {
+			t.Errorf("warning summary still uses raw absolute paths:\n%s", got)
 		}
 	})
 

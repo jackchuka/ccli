@@ -127,14 +127,14 @@ func renderMemoryList(p *output.Printer, report *agent.MemoryReport, home, cwd s
 		}
 	}
 
-	if len(report.Warnings) > 0 {
+	if summary := memoryWarningSummary(report.Files, home, cwd); len(summary) > 0 {
 		if err := p.PrintText(""); err != nil {
 			return err
 		}
 		if err := p.PrintText(output.RenderDivider("Warnings", noColor)); err != nil {
 			return err
 		}
-		for _, w := range report.Warnings {
+		for _, w := range summary {
 			if err := p.PrintText("  ! " + w); err != nil {
 				return err
 			}
@@ -143,10 +143,33 @@ func renderMemoryList(p *output.Printer, report *agent.MemoryReport, home, cwd s
 	return nil
 }
 
+// memoryWarningSummary repeats every warning in the tree as a flat list. It
+// re-derives them from the files rather than reading report.Warnings, which
+// labels each one with an absolute path: the rows above name their files
+// ./-relative or with a ~, and a summary the reader has to map back by hand
+// is worse than no summary.
+func memoryWarningSummary(files []agent.Memory, home, cwd string) []string {
+	var out []string
+	for _, f := range files {
+		label := memoryDisplayPath(f.Path, home, cwd)
+		for _, w := range f.Warnings {
+			out = append(out, label+": "+w)
+		}
+		out = append(out, memoryWarningSummary(f.Imports, home, cwd)...)
+	}
+	return out
+}
+
 // nameColWidth is the fixed rune width of the name column. Both top-level
 // and nested rows pad or elide into this width so the size columns that
 // follow line up regardless of how deep or long a path is.
 const nameColWidth = 44
+
+// nameColStart is the rune offset where the name column begins: the two
+// leading spaces, the bullet, the nine-wide scope column, and the spaces
+// between them in renderMemoryNode's format string. Warning rows indent from
+// it so they line up under the name of the file they describe.
+const nameColStart = 14
 
 // renderMemoryNode prints one file and, indented beneath it, the files it
 // imports. Import rows leave the bullet and scope columns blank so the size
@@ -186,6 +209,18 @@ func renderMemoryNode(p *output.Printer, m agent.Memory, home, cwd string, depth
 	}
 	if err := p.PrintText(line); err != nil {
 		return err
+	}
+
+	// The tree is the reason this command is not a table, so a file's
+	// findings belong under the file rather than in a flat list keyed by an
+	// absolute path the reader has to match back to a row. The indent
+	// follows the row's own name, not the top-level name column, so a
+	// warning on a deeply nested import does not read as the root file's.
+	warningIndent := strings.Repeat(" ", nameColStart+utf8.RuneCountInString(marker))
+	for _, w := range m.Warnings {
+		if err := p.PrintText(output.RenderDim(warningIndent+"! "+w, noColor)); err != nil {
+			return err
+		}
 	}
 
 	for _, im := range m.Imports {

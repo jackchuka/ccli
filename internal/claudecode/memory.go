@@ -235,6 +235,10 @@ func (a *Agent) expandImports(parent *agent.Memory, rootScope agent.Scope, depth
 		if !child.Exists {
 			child.Warnings = append(child.Warnings, "import target does not exist")
 		}
+		// Deliberately not NotLoaded: the approval may well have been granted,
+		// and ccli cannot tell. Counting it keeps the total an over-estimate
+		// the warning explains, rather than an under-estimate that silently
+		// hides content the session is probably carrying.
 		if (rootScope == agent.ScopeProject || rootScope == agent.ScopeLocal) && !withinDir(resolved, a.paths.CWD) {
 			child.External = true
 			child.Warnings = append(child.Warnings,
@@ -245,9 +249,14 @@ func (a *Agent) expandImports(parent *agent.Memory, rootScope agent.Scope, depth
 		case depth > maxImportDepth:
 			// The parent itself loaded; this is the import that would exceed the
 			// hop limit, so it is recorded but never read or recursed into.
+			child.NotLoaded = true
 			child.Warnings = append(child.Warnings,
 				fmt.Sprintf("import exceeds the %d-hop depth limit and is not loaded", maxImportDepth))
 		case seen[resolved]:
+			// A cycle is Claude Code refusing a second inclusion, the opposite
+			// of a diamond, where two branches each genuinely expand the same
+			// file and both occurrences cost context.
+			child.NotLoaded = true
 			child.Warnings = append(child.Warnings, "import is one of its own ancestors, forming a cycle")
 		default:
 			next := make(map[string]bool, len(seen)+1)

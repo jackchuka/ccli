@@ -86,15 +86,33 @@ type Memory struct {
 	Exists     bool       `json:"exists" yaml:"exists"`
 	Excluded   bool       `json:"excluded,omitempty" yaml:"excluded,omitempty"`
 	ExcludedBy string     `json:"excludedBy,omitempty" yaml:"excludedBy,omitempty"`
-	LinkTarget string     `json:"linkTarget,omitempty" yaml:"linkTarget,omitempty"`
-	External   bool       `json:"external,omitempty" yaml:"external,omitempty"`
-	Lines      int        `json:"lines,omitempty" yaml:"lines,omitempty"`
-	Bytes      int64      `json:"bytes,omitempty" yaml:"bytes,omitempty"`
-	Type       string     `json:"type,omitempty" yaml:"type,omitempty"`
-	Modified   string     `json:"modified,omitempty" yaml:"modified,omitempty"`
-	Depth      int        `json:"depth,omitempty" yaml:"depth,omitempty"`
-	Imports    []Memory   `json:"imports,omitempty" yaml:"imports,omitempty"`
-	Warnings   []string   `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	// NotLoaded records a refusal by Claude Code that no other field
+	// captures: an import past the hop limit, an import that is one of its
+	// own ancestors, or auto memory switched off in settings. Exists and
+	// Excluded carry the remaining non-load reasons; Loads combines them all.
+	NotLoaded  bool     `json:"notLoaded,omitempty" yaml:"notLoaded,omitempty"`
+	LinkTarget string   `json:"linkTarget,omitempty" yaml:"linkTarget,omitempty"`
+	External   bool     `json:"external,omitempty" yaml:"external,omitempty"`
+	Lines      int      `json:"lines,omitempty" yaml:"lines,omitempty"`
+	Bytes      int64    `json:"bytes,omitempty" yaml:"bytes,omitempty"`
+	Type       string   `json:"type,omitempty" yaml:"type,omitempty"`
+	Modified   string   `json:"modified,omitempty" yaml:"modified,omitempty"`
+	Depth      int      `json:"depth,omitempty" yaml:"depth,omitempty"`
+	Imports    []Memory `json:"imports,omitempty" yaml:"imports,omitempty"`
+	Warnings   []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+}
+
+// Loads reports whether Claude Code actually reads this file's content into
+// the session. It is the single answer the launch totals, the size warnings,
+// and the tree renderer all ask, so a newly discovered way for a file not to
+// load is honored everywhere by setting NotLoaded once, rather than by
+// repeating a boolean expression in three places.
+//
+// An External import still counts as loading: Claude Code gates those behind
+// a one-time approval that ccli cannot observe, and an over-estimate the
+// warnings make visible beats an under-estimate that hides content.
+func (m Memory) Loads() bool {
+	return m.Exists && !m.Excluded && !m.NotLoaded
 }
 
 // MemoryReport is the full memory audit: the launch tier in load order

@@ -104,7 +104,15 @@ cutoff (either one drops the rest), a `CLAUDE.md` over 200 lines (which
 reduces adherence) or over 4 MiB (which Claude Code **skips entirely**),
 broken or too-deep imports, imports that need external approval, files
 shadowed by `claudeMdExcludes`, and auto memory disabled in settings, which
-means `MEMORY.md` does not load at all.
+means `MEMORY.md` does not load at all. Each warning is printed under the
+file it belongs to, and repeated in a summary at the end.
+
+The launch total counts only what actually loads, so a file Claude Code
+refuses — excluded, absent, past the four-hop import limit, a cycle, or auto
+memory switched off — contributes nothing, while a file imported by two
+parents counts twice because it is expanded twice. The on-demand figure is a
+discovery count: those files never load at launch, so it reports how many are
+there, and any that would not load when read say so.
 
 The audit reflects Claude Code's documented resolution rules rather than
 instrumenting a running session; `/context` remains the ground truth for what

@@ -51,17 +51,23 @@ func (a *Agent) ListMemory() (*agent.MemoryReport, error) {
 	return report, nil
 }
 
-// markAutoMemoryDisabled warns on the auto memory index when the setting
-// turns auto memory off, and cascades the same reason onto its import
-// subtree: summarize's ancestor-aware walk already stops those imports from
-// counting, but without a warning of their own a user would see them go
-// silent with no explanation.
+// markAutoMemoryDisabled records that the setting stops auto memory loading,
+// on the index and on every topic file, and cascades the same reason onto the
+// index's import subtree: without a mark and a warning of their own these
+// files would go silent with no explanation, and a size warning would still
+// be computed for content that never reaches the session.
 func markAutoMemoryDisabled(files []agent.Memory) {
 	for i := range files {
-		if files[i].Kind == agent.MemoryKindAutoIndex {
+		switch files[i].Kind {
+		case agent.MemoryKindAutoIndex:
+			files[i].NotLoaded = true
 			files[i].Warnings = append(files[i].Warnings,
 				"auto memory is disabled in settings, so it does not load")
 			warnAutoMemoryDisabledSubtree(files[i].Imports, files[i].Path)
+		case agent.MemoryKindAutoTopic:
+			files[i].NotLoaded = true
+			files[i].Warnings = append(files[i].Warnings,
+				"auto memory is disabled in settings, so it does not load even when read")
 		}
 	}
 }
@@ -73,6 +79,7 @@ func markAutoMemoryDisabled(files []agent.Memory) {
 func warnAutoMemoryDisabledSubtree(imports []agent.Memory, importerPath string) {
 	for i := range imports {
 		imp := &imports[i]
+		imp.NotLoaded = true
 		imp.Warnings = append(imp.Warnings,
 			fmt.Sprintf("not loaded: imported by %s, whose auto memory is disabled", importerPath))
 		warnAutoMemoryDisabledSubtree(imp.Imports, imp.Path)
@@ -117,9 +124,12 @@ func (a *Agent) GetMemory(name string) (*agent.Memory, error) {
 }
 
 // annotateWarnings adds the size warnings that apply to a file's kind,
-// recursing into its imports.
+// recursing into its imports. A file that does not load gets none of them:
+// "only the first 200 lines load" contradicts "it does not load", and a
+// reader handed both warnings cannot act on either. It must therefore run
+// after every pass that can mark a file as not loading.
 func annotateWarnings(m *agent.Memory) {
-	if m.Exists && !m.Excluded {
+	if m.Loads() {
 		switch m.Kind {
 		case agent.MemoryKindAutoIndex:
 			if m.Lines > autoIndexMaxLines {
@@ -153,30 +163,34 @@ func annotateWarnings(m *agent.Memory) {
 // loads either, no matter how healthy that import looks in isolation.
 func summarize(report *agent.MemoryReport) {
 	for i := range report.Files {
-		summarizeNode(report, &report.Files[i], false)
+		summarizeNode(report, &report.Files[i], true)
 	}
 }
 
-// summarizeNode counts m toward the report's totals only when m and every
-// ancestor above it actually load, but always hoists m's own warnings —
-// every file's warnings surface whether or not it loads, since that is the
-// point of the audit — and recurses into m's imports with the combined
-// failure state.
-func summarizeNode(report *agent.MemoryReport, m *agent.Memory, ancestorFailed bool) {
-	autoDisabled := !report.AutoMemoryEnabled &&
-		(m.Kind == agent.MemoryKindAutoIndex || m.Kind == agent.MemoryKindAutoTopic)
-	failed := m.Excluded || !m.Exists || autoDisabled
+// summarizeNode counts m toward the report's totals, always hoists m's own
+// warnings — every file's warnings surface whether or not it loads, since
+// that is the point of the audit — and recurses into m's imports.
+//
+// The two tiers are counted by different questions. A launch file counts only
+// when it and every ancestor above it load, because Claude Code never reads a
+// file beneath one it refused. An on-demand file is counted on discovery
+// instead: these files do not load at launch by definition, so asking whether
+// they load would zero out a count whose job is to say how many are out
+// there, and a discovered file that will not load when read says so in its
+// own warnings. An import that is merely absent is not a discovery, so
+// existence is still required.
+func summarizeNode(report *agent.MemoryReport, m *agent.Memory, ancestorsLoad bool) {
+	loads := ancestorsLoad && m.Loads()
 
 	switch {
-	case ancestorFailed, failed:
-		// Counted nowhere: it does not load, and neither does anything
-		// beneath it.
-	case m.Tier == agent.MemoryTierLaunch:
+	case m.Tier == agent.MemoryTierOnDemand:
+		if m.Exists {
+			report.OnDemandFiles++
+		}
+	case loads:
 		report.LaunchFiles++
 		report.LaunchLines += m.Lines
 		report.LaunchBytes += m.Bytes
-	case m.Tier == agent.MemoryTierOnDemand:
-		report.OnDemandFiles++
 	}
 
 	label := m.Path
@@ -188,7 +202,7 @@ func summarizeNode(report *agent.MemoryReport, m *agent.Memory, ancestorFailed b
 	}
 
 	for i := range m.Imports {
-		summarizeNode(report, &m.Imports[i], ancestorFailed || failed)
+		summarizeNode(report, &m.Imports[i], loads)
 	}
 }
 

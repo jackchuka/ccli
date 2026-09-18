@@ -1218,3 +1218,205 @@ func TestGetMemory(t *testing.T) {
 		}
 	})
 }
+
+// memoryTestPaths builds a home/repo pair with the auto-memory env pair
+// neutralized, so no test resolves to a real Claude Code memory directory on
+// the machine running it.
+func memoryTestPaths(t *testing.T, settingsJSON string) (string, claudecode.Paths) {
+	t.Helper()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
+
+	root := t.TempDir()
+	claudeHome := filepath.Join(root, "home", ".claude")
+	repo := filepath.Join(root, "repo")
+	for _, d := range []string{claudeHome, repo} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings := filepath.Join(claudeHome, "settings.json")
+	if err := os.WriteFile(settings, []byte(settingsJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return repo, claudecode.Paths{
+		SettingsFile: settings,
+		HomeDir:      claudeHome,
+		UserHomeDir:  filepath.Join(root, "home"),
+		CWD:          repo,
+	}
+}
+
+func writeMemoryFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestListMemoryDepthLimitAndCycleDoNotCount pins the two structural
+// non-load conditions that carry no Excluded or Exists flag of their own.
+// Both files are on disk and readable, so only the audit's own knowledge
+// that Claude Code refuses them keeps them out of the totals.
+func TestListMemoryDepthLimitAndCycleDoNotCount(t *testing.T) {
+	repo, paths := memoryTestPaths(t, `{}`)
+
+	writeMemoryFile(t, filepath.Join(repo, "CLAUDE.md"), "@one.md\n@loop.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "one.md"), "@two.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "two.md"), "@three.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "three.md"), "@four.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "four.md"), "@five.md\n")
+	// five.md sits one hop past the limit. Its 99 lines are large enough
+	// that counting it could not be mistaken for any other contribution.
+	writeMemoryFile(t, filepath.Join(repo, "five.md"), strings.Repeat("dropped\n", 99))
+	// loop.md imports the file that imported it: a cycle, which is Claude
+	// Code refusing a second inclusion rather than a second inclusion.
+	writeMemoryFile(t, filepath.Join(repo, "loop.md"), "@CLAUDE.md\n")
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	// CLAUDE.md, one, two, three, four, loop: six files that load.
+	if report.LaunchFiles != 6 {
+		t.Errorf("LaunchFiles = %d, want 6 (the over-depth import and the cycle node load nothing)", report.LaunchFiles)
+	}
+	if report.LaunchLines != 7 {
+		t.Errorf("LaunchLines = %d, want 7 (2 + 1 + 1 + 1 + 1 + 1)", report.LaunchLines)
+	}
+
+	var sawDepth, sawCycle bool
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		switch {
+		case filepath.Base(f.Path) == "five.md":
+			sawDepth = true
+			if f.Loads() || !f.NotLoaded {
+				t.Errorf("five.md is past the depth limit and must not load: %+v", f)
+			}
+		case f.Kind == agent.MemoryKindImport && filepath.Base(f.Path) == "CLAUDE.md":
+			sawCycle = true
+			if f.Loads() || !f.NotLoaded {
+				t.Errorf("the cycle node must not load: %+v", f)
+			}
+		}
+	}
+	if !sawDepth || !sawCycle {
+		t.Fatalf("fixture did not produce both nodes (depth %v, cycle %v)", sawDepth, sawCycle)
+	}
+}
+
+// TestListMemoryDiamondCountsTwice is the counterpart to the cycle case: two
+// parents importing one file is Claude Code expanding it textually twice, so
+// it genuinely occupies context twice and must not be deduplicated by path.
+func TestListMemoryDiamondCountsTwice(t *testing.T) {
+	repo, paths := memoryTestPaths(t, `{}`)
+
+	writeMemoryFile(t, filepath.Join(repo, "CLAUDE.md"), "@left.md\n@right.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "left.md"), "@shared.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "right.md"), "@shared.md\n")
+	writeMemoryFile(t, filepath.Join(repo, "shared.md"), strings.Repeat("shared\n", 10))
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	if report.LaunchFiles != 5 {
+		t.Errorf("LaunchFiles = %d, want 5 (root, two branches, shared.md under each)", report.LaunchFiles)
+	}
+	if report.LaunchLines != 24 {
+		t.Errorf("LaunchLines = %d, want 24 (2 + 1 + 1 + 10 + 10)", report.LaunchLines)
+	}
+}
+
+// TestListMemoryOnDemandCountMatchesTheList pins the count to the rows the
+// renderer prints. On-demand files never load at launch, so filtering them
+// by whether they load would zero out a count whose job is discovery.
+func TestListMemoryOnDemandCountMatchesTheList(t *testing.T) {
+	root := t.TempDir()
+	memDir := filepath.Join(root, "mem")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo, paths := memoryTestPaths(t,
+		`{"autoMemoryEnabled":false,"autoMemoryDirectory":"`+memDir+`"}`)
+
+	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMemoryFile(t, filepath.Join(repo, "pkg", "CLAUDE.md"), "on demand\n")
+	writeMemoryFile(t, filepath.Join(memDir, "MEMORY.md"), "index\n")
+	writeMemoryFile(t, filepath.Join(memDir, "topic_a.md"), "a\n")
+	writeMemoryFile(t, filepath.Join(memDir, "topic_b.md"), "b\n")
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	listed := 0
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		if f.Tier == agent.MemoryTierOnDemand {
+			listed++
+		}
+	}
+	if listed != 3 {
+		t.Fatalf("fixture discovered %d on-demand files, want 3", listed)
+	}
+	if report.OnDemandFiles != listed {
+		t.Errorf("OnDemandFiles = %d but %d on-demand files are listed; the count and the list must agree",
+			report.OnDemandFiles, listed)
+	}
+
+	// The topic files do not load when read either, and say so, which is
+	// what lets the count stay a discovery count without misleading anyone.
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		if f.Kind == agent.MemoryKindAutoTopic && len(f.Warnings) == 0 {
+			t.Errorf("topic file %q should explain that auto memory is disabled", f.Path)
+		}
+	}
+}
+
+// TestListMemoryNoContradictoryWarnings pins that a file which does not load
+// gets no size warning: "only the first 200 lines load" and "it does not
+// load" cannot both be true, and a reader handed both can act on neither.
+func TestListMemoryNoContradictoryWarnings(t *testing.T) {
+	root := t.TempDir()
+	memDir := filepath.Join(root, "mem")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, paths := memoryTestPaths(t,
+		`{"autoMemoryEnabled":false,"autoMemoryDirectory":"`+memDir+`"}`)
+
+	writeMemoryFile(t, filepath.Join(memDir, "MEMORY.md"), strings.Repeat("entry\n", 201))
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+
+	var index *agent.Memory
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		if f.Kind == agent.MemoryKindAutoIndex {
+			index = &f
+		}
+	}
+	if index == nil {
+		t.Fatal("fixture did not produce a MEMORY.md")
+	}
+
+	var sawDisabled bool
+	for _, w := range index.Warnings {
+		if strings.Contains(w, "disabled") {
+			sawDisabled = true
+		}
+		if strings.Contains(w, "only the first") {
+			t.Errorf("a file that does not load must not also be told part of it loads: %q", w)
+		}
+	}
+	if !sawDisabled {
+		t.Errorf("MEMORY.md should warn that auto memory is disabled, got %v", index.Warnings)
+	}
+}
