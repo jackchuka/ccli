@@ -18,6 +18,12 @@ func getAgent() (agent.Agent, error) {
 	return claudecode.NewAgent(paths), nil
 }
 
+// getPaths exposes the agent's home/cwd resolution to renderers that need to
+// abbreviate paths; claudecode.Agent keeps its Paths private.
+func getPaths() (claudecode.Paths, error) {
+	return claudecode.DefaultPaths()
+}
+
 func getPrinter() (*output.Printer, error) {
 	f, err := output.ParseFormat(format)
 	if err != nil {
