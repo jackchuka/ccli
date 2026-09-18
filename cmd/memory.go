@@ -243,15 +243,6 @@ func renderMemoryGet(p *output.Printer, m *agent.Memory, home, cwd string) error
 	return nil
 }
 
-// pluralize returns singular unmodified for a count of 1, and with a
-// trailing "s" otherwise, for count labels like "3 files".
-func pluralize(n int, singular string) string {
-	if n == 1 {
-		return singular
-	}
-	return singular + "s"
-}
-
 // elideMiddlePath shortens a display path to at most width runes, keeping
 // the leading "./" or "~/" marker and as much of the basename as fits —
 // the basename is what a reader scans for. The result never exceeds

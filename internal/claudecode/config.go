@@ -114,7 +114,10 @@ func LoadSettings(path string) (*Settings, error) {
 
 // MergedSettings holds the memory-relevant settings resolved across every
 // settings layer. Claude Code's precedence is managed > local > project >
-// user for scalars, while claudeMdExcludes arrays merge across all layers.
+// user for most scalars, while claudeMdExcludes arrays merge across all
+// layers and ClaudeMd is managed-only: Claude Code honors claudeMd in
+// managed and policy settings and ignores it everywhere else, so widening it
+// to the other layers would report memory that never loads.
 type MergedSettings struct {
 	ClaudeMd            string
 	ClaudeMdExcludes    []string
