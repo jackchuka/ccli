@@ -462,3 +462,48 @@ func TestExpandImportsFlagsExternal(t *testing.T) {
 		t.Error("personal-scope imports must not be flagged external")
 	}
 }
+
+func TestApplyExclusions(t *testing.T) {
+	files := []agent.Memory{
+		{Path: "/repo/CLAUDE.md", Scope: agent.ScopeProject, Exists: true, Imports: []agent.Memory{
+			{Path: "/repo/docs/nested.md", Scope: agent.ScopeProject, Exists: true},
+		}},
+		{Path: "/repo/other/CLAUDE.md", Scope: agent.ScopeProject, Exists: true},
+		{Path: "/Library/Application Support/ClaudeCode/CLAUDE.md", Scope: agent.ScopeManaged, Exists: true},
+		{Path: "/repo/.claude/rules/link.md", Scope: agent.ScopeProject, Exists: true, LinkTarget: "/shared/security.md"},
+	}
+
+	claudecode.ApplyExclusions(files, []string{
+		"**/other/CLAUDE.md",
+		"/repo/docs/**",
+		"**/ClaudeCode/CLAUDE.md",
+		"/shared/**",
+	}, "/home/u")
+
+	if files[0].Excluded {
+		t.Error("/repo/CLAUDE.md should not be excluded")
+	}
+	if !files[0].Imports[0].Excluded {
+		t.Error("nested import matching /repo/docs/** should be excluded")
+	}
+	if !files[1].Excluded || files[1].ExcludedBy != "**/other/CLAUDE.md" {
+		t.Errorf("expected exclusion by pattern, got %+v", files[1])
+	}
+	if len(files[1].Warnings) == 0 {
+		t.Error("excluded file should carry a warning")
+	}
+	if files[2].Excluded {
+		t.Error("managed policy CLAUDE.md cannot be excluded")
+	}
+	if !files[3].Excluded {
+		t.Error("a pattern matching the symlink target should exclude the file")
+	}
+}
+
+func TestApplyExclusionsExpandsTilde(t *testing.T) {
+	files := []agent.Memory{{Path: "/home/u/.claude/CLAUDE.md", Scope: agent.ScopePersonal, Exists: true}}
+	claudecode.ApplyExclusions(files, []string{"~/.claude/CLAUDE.md"}, "/home/u")
+	if !files[0].Excluded {
+		t.Error("a ~/-prefixed pattern should match the expanded path")
+	}
+}

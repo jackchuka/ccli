@@ -295,3 +295,33 @@ func (a *Agent) ExpandInto(files []agent.Memory) []agent.Memory {
 
 // MaxImportDepth exposes maxImportDepth for tests.
 func MaxImportDepth() int { return maxImportDepth }
+
+// applyExclusions marks files matched by claudeMdExcludes. Managed policy
+// files are exempt: Claude Code does not let individual settings exclude them.
+func applyExclusions(files []agent.Memory, patterns []string, home string) {
+	if len(patterns) == 0 {
+		return
+	}
+	for i := range files {
+		f := &files[i]
+		applyExclusions(f.Imports, patterns, home)
+
+		if f.Scope == agent.ScopeManaged || f.Path == "" {
+			continue
+		}
+		for _, raw := range patterns {
+			pattern := expandTilde(raw, home)
+			if globMatch(pattern, f.Path) || (f.LinkTarget != "" && globMatch(pattern, f.LinkTarget)) {
+				f.Excluded = true
+				f.ExcludedBy = raw
+				f.Warnings = append(f.Warnings, "excluded by claudeMdExcludes, so it does not load")
+				break
+			}
+		}
+	}
+}
+
+// ApplyExclusions exposes applyExclusions for tests.
+func ApplyExclusions(files []agent.Memory, patterns []string, home string) {
+	applyExclusions(files, patterns, home)
+}
