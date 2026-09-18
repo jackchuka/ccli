@@ -84,6 +84,11 @@ func (a *Agent) Info() (*agent.InstallInfo, error) {
 		info.SkillCount = len(skills)
 	}
 
+	// Memory count: launch-tier files only, matching `ccli memory list`.
+	if report, err := a.ListMemory(); err == nil {
+		info.MemoryCount = report.LaunchFiles
+	}
+
 	return info, nil
 }
 

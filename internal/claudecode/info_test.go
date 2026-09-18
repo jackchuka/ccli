@@ -1,6 +1,8 @@
 package claudecode_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jackchuka/ccli/internal/claudecode"
@@ -32,6 +34,30 @@ func TestInfo(t *testing.T) {
 	}
 	if info.SkillCount < 1 {
 		t.Errorf("skillCount = %d, want >= 1", info.SkillCount)
+	}
+}
+
+func TestInfoCountsMemoryFiles(t *testing.T) {
+	root := t.TempDir()
+	claudeHome := filepath.Join(root, "home", ".claude")
+	if err := os.MkdirAll(claudeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeHome, "CLAUDE.md"), []byte("rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claudecode.NewAgent(claudecode.Paths{
+		HomeDir:     claudeHome,
+		UserHomeDir: filepath.Join(root, "home"),
+		CWD:         root,
+	})
+	info, err := a.Info()
+	if err != nil {
+		t.Fatalf("Info: %v", err)
+	}
+	if info.MemoryCount < 1 {
+		t.Errorf("MemoryCount = %d, want at least 1", info.MemoryCount)
 	}
 }
 

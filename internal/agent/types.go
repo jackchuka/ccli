@@ -125,4 +125,5 @@ type InstallInfo struct {
 	MCPCount     int    `json:"mcpCount" yaml:"mcpCount"`
 	SkillCount   int    `json:"skillCount" yaml:"skillCount"`
 	PluginCount  int    `json:"pluginCount" yaml:"pluginCount"`
+	MemoryCount  int    `json:"memoryCount" yaml:"memoryCount"`
 }

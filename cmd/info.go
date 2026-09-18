@@ -54,8 +54,8 @@ func renderInfo(p *output.Printer, info *agent.InstallInfo) error {
 	p.PrintText(fmt.Sprintf("  Sessions   %d", info.SessionCount))
 	p.PrintText(fmt.Sprintf("  Projects   %d", info.ProjectCount))
 	p.PrintText(fmt.Sprintf("  Storage    %s", output.FormatBytes(info.StorageBytes)))
-	p.PrintText(output.RenderDim(fmt.Sprintf("  ◈ %d MCP servers   ◈ %d Skills   ◈ %d Plugins",
-		info.MCPCount, info.SkillCount, info.PluginCount), noColor))
+	p.PrintText(output.RenderDim(fmt.Sprintf("  ◈ %d MCP servers   ◈ %d Skills   ◈ %d Plugins   ◈ %d Memory files",
+		info.MCPCount, info.SkillCount, info.PluginCount, info.MemoryCount), noColor))
 
 	return nil
 }
