@@ -1830,6 +1830,22 @@ func TestApplyInstructionModeManagedOnly(t *testing.T) {
 	}
 }
 
+func TestApplyInstructionModeManagedOnlyIgnoresAbsentFiles(t *testing.T) {
+	// The audit lists the CLAUDE.md locations it knows about even when they
+	// hold no file; a mode has nothing to say about one that is not there.
+	files := []agent.Memory{
+		{Path: "/home/u/.claude/CLAUDE.md", Scope: agent.ScopePersonal, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch},
+		{Path: "/repo/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch},
+	}
+	claudecode.ApplyInstructionMode(files, claudecode.ModeManagedOnly, "/repo", "")
+
+	for _, f := range files {
+		if f.NotLoaded || len(f.Warnings) > 0 {
+			t.Errorf("an absent location must not be marked or warned: %+v", f)
+		}
+	}
+}
+
 // TestApplyInstructionModeOnDemandAgentsMD pins the answer every mode owes an
 // on-demand AGENTS.md, which discovery no longer decides on its own. The
 // working directory holds no CLAUDE.md, so the default mode's global test

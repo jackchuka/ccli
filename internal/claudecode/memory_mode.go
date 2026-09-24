@@ -199,6 +199,10 @@ func markAgentsMDBy(files []agent.Memory, reasonFor func(*agent.Memory) string) 
 // in this mode. An on-demand AGENTS.md is not — the carve-out names only a
 // subdirectory's CLAUDE.md and its rules, and every AGENTS.md is left out
 // whatever its tier.
+//
+// A location that holds no file is skipped, because the audit lists the
+// CLAUDE.md locations it knows about whether or not they exist and a mode has
+// nothing to say about a file that is not there.
 func markManagedOnly(files []agent.Memory) {
 	reason := fmt.Sprintf("not read in %s mode", ModeManagedOnly)
 	for i := range files {
@@ -206,6 +210,9 @@ func markManagedOnly(files []agent.Memory) {
 			continue
 		}
 		if files[i].Scope == agent.ScopeManaged || files[i].Kind == agent.MemoryKindAutoIndex {
+			continue
+		}
+		if !files[i].Exists {
 			continue
 		}
 		files[i].NotLoaded = true
