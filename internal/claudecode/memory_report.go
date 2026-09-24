@@ -51,6 +51,11 @@ func (a *Agent) memoryReport(includeOnDemand bool) *agent.MemoryReport {
 		// non-load has to be recorded here rather than skipped upstream.
 		markAutoMemoryDisabled(files)
 	}
+	// Before annotateWarnings: it suppresses size warnings for files that do
+	// not load, so a file this pass refuses must be marked first.
+	mode := ParseInstructionMode(s.InstructionFiles)
+	modeWarnings := applyInstructionMode(files, mode, a.paths.CWD, a.paths.HomeDir)
+
 	for i := range files {
 		annotateWarnings(&files[i])
 	}
@@ -59,8 +64,10 @@ func (a *Agent) memoryReport(includeOnDemand bool) *agent.MemoryReport {
 		Files:             files,
 		AutoMemoryEnabled: s.AutoMemoryEnabled,
 		AutoMemoryDir:     autoDir,
+		InstructionFiles:  string(mode),
 	}
 	summarize(report)
+	report.Warnings = append(report.Warnings, modeWarnings...)
 	return report
 }
 

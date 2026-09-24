@@ -126,6 +126,7 @@ type MemoryReport struct {
 	OnDemandFiles     int      `json:"onDemandFiles" yaml:"onDemandFiles"`
 	AutoMemoryEnabled bool     `json:"autoMemoryEnabled" yaml:"autoMemoryEnabled"`
 	AutoMemoryDir     string   `json:"autoMemoryDir" yaml:"autoMemoryDir"`
+	InstructionFiles  string   `json:"instructionFiles" yaml:"instructionFiles"`
 	Warnings          []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 

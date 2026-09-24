@@ -282,3 +282,19 @@ func TestRenderMemoryGetWarnings(t *testing.T) {
 		t.Errorf("output missing rendered warning:\n%s", got)
 	}
 }
+
+func TestRenderMemoryListShowsInstructionMode(t *testing.T) {
+	var buf bytes.Buffer
+	p := output.NewPrinter(&buf, output.FormatText, true)
+	report := &agent.MemoryReport{
+		Files:            []agent.Memory{},
+		LaunchFiles:      0,
+		InstructionFiles: "claude-md-and-agents-md",
+	}
+	if err := renderMemoryList(p, report, "/home/u", "/home/u/repo", false); err != nil {
+		t.Fatalf("renderMemoryList: %v", err)
+	}
+	if !strings.Contains(buf.String(), "instruction files: claude-md-and-agents-md") {
+		t.Errorf("output should name the active mode:\n%s", buf.String())
+	}
+}

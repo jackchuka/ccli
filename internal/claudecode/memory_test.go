@@ -1865,3 +1865,124 @@ func TestApplyInstructionModeAndDoesNotSuppressUnloadedImport(t *testing.T) {
 		t.Error("an AGENTS.md whose only import copy is over the hop limit must still load itself")
 	}
 }
+
+func TestListMemoryReportsInstructionMode(t *testing.T) {
+	root, paths := agentsFixture(t)
+	repo := filepath.Join(root, "repo")
+	writeFixtureFile(t, filepath.Join(repo, "CLAUDE.md"), "claude\n")
+	writeFixtureFile(t, filepath.Join(repo, "AGENTS.md"), strings.Repeat("agents\n", 10))
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+	if report.InstructionFiles != string(claudecode.ModeClaudeMDOrAgentsMD) {
+		t.Errorf("InstructionFiles = %q, want the default mode", report.InstructionFiles)
+	}
+
+	// The shadowed AGENTS.md is reported, explained, and excluded from totals.
+	var agentsEntry *agent.Memory
+	for i, f := range report.Files {
+		if f.Kind == agent.MemoryKindAgentsMD {
+			agentsEntry = &report.Files[i]
+		}
+	}
+	if agentsEntry == nil {
+		t.Fatal("the shadowed AGENTS.md should still be reported")
+	}
+	if !agentsEntry.NotLoaded {
+		t.Error("the shadowed AGENTS.md should be marked not loading")
+	}
+	if report.LaunchLines != 1 {
+		t.Errorf("LaunchLines = %d, want 1: only the CLAUDE.md loads", report.LaunchLines)
+	}
+	var sawShadowWarning bool
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "shadowed by") {
+			sawShadowWarning = true
+		}
+	}
+	if !sawShadowWarning {
+		t.Errorf("the shadowing should surface as a warning: %v", report.Warnings)
+	}
+}
+
+func TestListMemoryAgentsMDOnlyRepoCounts(t *testing.T) {
+	root, paths := agentsFixture(t)
+	writeFixtureFile(t, filepath.Join(root, "repo", "AGENTS.md"), strings.Repeat("agents\n", 10))
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+	if report.LaunchLines != 10 {
+		t.Errorf("LaunchLines = %d, want 10: with no CLAUDE.md, AGENTS.md loads", report.LaunchLines)
+	}
+}
+
+func TestAgentsMDImportsExpand(t *testing.T) {
+	root, paths := agentsFixture(t)
+	repo := filepath.Join(root, "repo")
+	writeFixtureFile(t, filepath.Join(repo, "AGENTS.md"), "agents\n@docs/extra.md\n")
+	writeFixtureFile(t, filepath.Join(repo, "docs", "extra.md"), "extra\n")
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+	for _, f := range report.Files {
+		if f.Kind == agent.MemoryKindAgentsMD {
+			if len(f.Imports) != 1 || !f.Imports[0].Exists {
+				t.Fatalf("an AGENTS.md's @imports must expand: %+v", f.Imports)
+			}
+			if f.Imports[0].Depth != 1 {
+				t.Errorf("Depth = %d, want 1", f.Imports[0].Depth)
+			}
+			return
+		}
+	}
+	t.Fatal("no AGENTS.md entry found")
+}
+
+func TestClaudeMdExcludesMatchesAgentsMD(t *testing.T) {
+	root, paths := agentsFixture(t)
+	writeFixtureFile(t, filepath.Join(root, "repo", "AGENTS.md"), strings.Repeat("agents\n", 10))
+	writeFixtureFile(t, paths.SettingsFile, `{"claudeMdExcludes":["**/repo/AGENTS.md"]}`)
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+	for _, f := range report.Files {
+		if f.Kind == agent.MemoryKindAgentsMD {
+			if !f.Excluded {
+				t.Error("claudeMdExcludes must apply to AGENTS.md")
+			}
+			if report.LaunchLines != 0 {
+				t.Errorf("LaunchLines = %d, want 0: the only instruction file is excluded", report.LaunchLines)
+			}
+			return
+		}
+	}
+	t.Fatal("no AGENTS.md entry found")
+}
+
+func TestInstructionFilesSurvivesJSONAndYAML(t *testing.T) {
+	report := &agent.MemoryReport{InstructionFiles: string(claudecode.ModeClaudeMDAndAgentsMD)}
+
+	j, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(j), `"instructionFiles":"claude-md-and-agents-md"`) {
+		t.Errorf("JSON missing the mode: %s", j)
+	}
+
+	y, err := yaml.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(y), "instructionFiles: claude-md-and-agents-md") {
+		t.Errorf("YAML missing the mode: %s", y)
+	}
+}

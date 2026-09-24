@@ -102,6 +102,10 @@ func renderMemoryList(p *output.Printer, report *agent.MemoryReport, home, cwd s
 		report.OnDemandFiles, pluralize(report.OnDemandFiles, "file")), noColor)); err != nil {
 		return err
 	}
+	if err := p.PrintText(output.RenderDim(fmt.Sprintf("  instruction files: %s",
+		report.InstructionFiles), noColor)); err != nil {
+		return err
+	}
 
 	if showOnDemand {
 		if err := p.PrintText(""); err != nil {
