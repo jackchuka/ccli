@@ -1779,8 +1779,8 @@ func TestApplyInstructionModeDefaultShadows(t *testing.T) {
 	if !files[3].NotLoaded {
 		t.Fatal("AGENTS.md should be shadowed when a CLAUDE.md exists")
 	}
-	if len(files[3].Warnings) == 0 || !strings.Contains(files[3].Warnings[0], "shadowed by") {
-		t.Errorf("warning should name the shadowing file: %v", files[3].Warnings)
+	if len(files[3].Warnings) == 0 || !strings.Contains(files[3].Warnings[0], "shadowed by ./CLAUDE.md") {
+		t.Errorf("warning should name the shadowing file ./-relative to cwd: %v", files[3].Warnings)
 	}
 	if files[2].NotLoaded {
 		t.Error("the CLAUDE.md itself must still load")
@@ -1826,6 +1826,11 @@ func TestApplyInstructionModeDefaultDoesNotShadowOnUserOrManaged(t *testing.T) {
 
 		if !files[3].NotLoaded {
 			t.Error("a CLAUDE.md directly in the home directory must still shadow AGENTS.md")
+		}
+		// proj is one level below home, so the shadowing CLAUDE.md is one
+		// level above cwd: it must render "../CLAUDE.md", not an absolute path.
+		if len(files[3].Warnings) == 0 || !strings.Contains(files[3].Warnings[0], "shadowed by ../CLAUDE.md") {
+			t.Errorf("warning should name the shadowing file relative to cwd: %v", files[3].Warnings)
 		}
 	})
 }

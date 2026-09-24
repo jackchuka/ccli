@@ -69,7 +69,7 @@ func TestRenderMemoryList(t *testing.T) {
 			"./CLAUDE.md",
 			"└─ @docs/architecture.md",
 			"(absent)",
-			"loaded at launch: 3 files",
+			"loaded at launch:  3 files",
 			"259L",
 			"on demand:",
 			"⇢ /dotfiles/CLAUDE.md",
@@ -203,7 +203,9 @@ func TestMemoryColumnAlignment(t *testing.T) {
 						}},
 				}},
 		},
-		LaunchFiles: 4,
+		LaunchFiles:      4,
+		OnDemandFiles:    2,
+		InstructionFiles: "claude-md-or-agents-md",
 	}
 
 	var buf bytes.Buffer
@@ -241,6 +243,35 @@ func TestMemoryColumnAlignment(t *testing.T) {
 			want = offset
 		} else if offset != want {
 			t.Errorf("%s: size column starts at rune %d, want %d (same as %s)", r.name, offset, want, rows[0].name)
+		}
+	}
+
+	// The summary block's three labels ("loaded at launch:", "on demand:",
+	// "instruction files:") differ wildly in length; their values must still
+	// start in the same column.
+	summaryLabels := []string{"loaded at launch:", "on demand:", "instruction files:"}
+	var summaryWant int
+	for i, label := range summaryLabels {
+		offset := -1
+		for _, line := range lines {
+			idx := strings.Index(line, label)
+			if idx < 0 {
+				continue
+			}
+			j := idx + len(label)
+			for j < len(line) && line[j] == ' ' {
+				j++
+			}
+			offset = utf8.RuneCountInString(line[:j])
+			break
+		}
+		if offset < 0 {
+			t.Fatalf("%q: could not find that label in output:\n%s", label, buf.String())
+		}
+		if i == 0 {
+			summaryWant = offset
+		} else if offset != summaryWant {
+			t.Errorf("%q: value starts at rune %d, want %d (same as %q)", label, offset, summaryWant, summaryLabels[0])
 		}
 	}
 }
@@ -296,5 +327,37 @@ func TestRenderMemoryListShowsInstructionMode(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "instruction files: claude-md-and-agents-md") {
 		t.Errorf("output should name the active mode:\n%s", buf.String())
+	}
+}
+
+// TestRenderMemoryListShowsFilelessWarnings guards the managed-only case:
+// applyInstructionMode returns a report-level warning with no file to hang
+// from ("also excludes .claude/rules/..."), and memoryWarningSummary must
+// still surface it in text output even though it has no per-file entry to
+// derive it from.
+func TestRenderMemoryListShowsFilelessWarnings(t *testing.T) {
+	var buf bytes.Buffer
+	p := output.NewPrinter(&buf, output.FormatText, true)
+	report := &agent.MemoryReport{
+		Files: []agent.Memory{
+			{Path: "/home/u/repo/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD,
+				Tier: agent.MemoryTierLaunch, Exists: true, Lines: 5, Bytes: 100,
+				Warnings: []string{"a per-file warning"}},
+		},
+		InstructionFiles: "managed-only",
+		Warnings: []string{
+			"/home/u/repo/CLAUDE.md: a per-file warning",
+			"managed-only mode also excludes .claude/rules/, which this audit does not enumerate; run ccli rules to see them",
+		},
+	}
+	if err := renderMemoryList(p, report, "/home/u", "/home/u/repo", false); err != nil {
+		t.Fatalf("renderMemoryList: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "! ./CLAUDE.md: a per-file warning") {
+		t.Errorf("per-file warning should still render as before, ./-relative:\n%s", got)
+	}
+	if !strings.Contains(got, "! managed-only mode also excludes .claude/rules/") {
+		t.Errorf("the fileless report-level warning should also render:\n%s", got)
 	}
 }

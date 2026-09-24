@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jackchuka/ccli/internal/agent"
 )
@@ -99,10 +100,26 @@ func applyInstructionMode(files []agent.Memory, mode InstructionMode, cwd, perso
 		markAlreadyImportedAgentsMD(files)
 	default:
 		if shadow := shadowingClaudeMD(cwd, personalDir); shadow != "" {
-			markAgentsMD(files, fmt.Sprintf("shadowed by %s; not read in %s mode", shadow, ModeClaudeMDOrAgentsMD))
+			markAgentsMD(files, fmt.Sprintf("shadowed by %s; not read in %s mode", relativeToCWD(cwd, shadow), ModeClaudeMDOrAgentsMD))
 		}
 	}
 	return nil
+}
+
+// relativeToCWD renders path relative to cwd, "./"-prefixed when it sits
+// under cwd, so a shadow warning names its file the same way every other
+// path in the audit's output does rather than with a raw absolute path. It
+// falls back to the absolute path when filepath.Rel cannot relate the two,
+// which only happens across Windows volumes.
+func relativeToCWD(cwd, path string) string {
+	rel, err := filepath.Rel(cwd, path)
+	if err != nil {
+		return path
+	}
+	if rel == "." || strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	return "." + string(filepath.Separator) + rel
 }
 
 // markAgentsMD marks each top-level AGENTS.md as not loading. It does not

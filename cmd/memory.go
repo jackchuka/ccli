@@ -94,16 +94,17 @@ func renderMemoryList(p *output.Printer, report *agent.MemoryReport, home, cwd s
 	if err := p.PrintText(""); err != nil {
 		return err
 	}
-	if err := p.PrintText(output.RenderDim(fmt.Sprintf("  loaded at launch: %d %s · %dL · %s",
-		report.LaunchFiles, pluralize(report.LaunchFiles, "file"), report.LaunchLines, output.FormatBytes(report.LaunchBytes)), noColor)); err != nil {
+	if err := p.PrintText(output.RenderDim(fmt.Sprintf("%s %d %s · %dL · %s",
+		summaryLabel("  loaded at launch:"), report.LaunchFiles, pluralize(report.LaunchFiles, "file"),
+		report.LaunchLines, output.FormatBytes(report.LaunchBytes)), noColor)); err != nil {
 		return err
 	}
-	if err := p.PrintText(output.RenderDim(fmt.Sprintf("  on demand:        %d %s",
-		report.OnDemandFiles, pluralize(report.OnDemandFiles, "file")), noColor)); err != nil {
+	if err := p.PrintText(output.RenderDim(fmt.Sprintf("%s %d %s",
+		summaryLabel("  on demand:"), report.OnDemandFiles, pluralize(report.OnDemandFiles, "file")), noColor)); err != nil {
 		return err
 	}
-	if err := p.PrintText(output.RenderDim(fmt.Sprintf("  instruction files: %s",
-		report.InstructionFiles), noColor)); err != nil {
+	if err := p.PrintText(output.RenderDim(fmt.Sprintf("%s %s",
+		summaryLabel("  instruction files:"), report.InstructionFiles), noColor)); err != nil {
 		return err
 	}
 
@@ -131,7 +132,7 @@ func renderMemoryList(p *output.Printer, report *agent.MemoryReport, home, cwd s
 		}
 	}
 
-	if summary := memoryWarningSummary(report.Files, home, cwd); len(summary) > 0 {
+	if summary := memoryWarningSummary(report, home, cwd); len(summary) > 0 {
 		if err := p.PrintText(""); err != nil {
 			return err
 		}
@@ -147,21 +148,56 @@ func renderMemoryList(p *output.Printer, report *agent.MemoryReport, home, cwd s
 	return nil
 }
 
-// memoryWarningSummary repeats every warning in the tree as a flat list. It
-// re-derives them from the files rather than reading report.Warnings, which
-// labels each one with an absolute path: the rows above name their files
-// ./-relative or with a ~, and a summary the reader has to map back by hand
-// is worse than no summary.
-func memoryWarningSummary(files []agent.Memory, home, cwd string) []string {
+// summaryLabelWidth is the width of "  instruction files:", the widest of
+// the summary block's labels; the other two pad out to it so all three
+// values start in the same column.
+const summaryLabelWidth = len("  instruction files:")
+
+// summaryLabel pads a summary line's label to summaryLabelWidth.
+func summaryLabel(label string) string {
+	return fmt.Sprintf("%-*s", summaryLabelWidth, label)
+}
+
+// memoryWarningSummary repeats every per-file warning in the tree as a flat
+// list, re-deriving them from the files rather than reading
+// report.Warnings directly: report.Warnings labels each one with an
+// absolute path, while the rows above name their files ./-relative or with
+// a ~, and a summary the reader has to map back by hand is worse than no
+// summary. It then appends the report-level warnings that have no file to
+// hang from — summarize (in memory_report.go) builds report.Warnings as
+// every per-file warning followed by these, in that same order, so the
+// count of per-file warnings in the tree marks where that fileless tail
+// begins.
+func memoryWarningSummary(report *agent.MemoryReport, home, cwd string) []string {
+	out := fileWarningSummary(report.Files, home, cwd)
+	if n := countWarnings(report.Files); n < len(report.Warnings) {
+		out = append(out, report.Warnings[n:]...)
+	}
+	return out
+}
+
+func fileWarningSummary(files []agent.Memory, home, cwd string) []string {
 	var out []string
 	for _, f := range files {
 		label := memoryDisplayPath(f.Path, home, cwd)
 		for _, w := range f.Warnings {
 			out = append(out, label+": "+w)
 		}
-		out = append(out, memoryWarningSummary(f.Imports, home, cwd)...)
+		out = append(out, fileWarningSummary(f.Imports, home, cwd)...)
 	}
 	return out
+}
+
+// countWarnings counts every per-file warning in the tree, in the same
+// order summarize walks it, so memoryWarningSummary can tell where
+// report.Warnings' fileless tail begins.
+func countWarnings(files []agent.Memory) int {
+	n := 0
+	for _, f := range files {
+		n += len(f.Warnings)
+		n += countWarnings(f.Imports)
+	}
+	return n
 }
 
 // nameColWidth is the fixed rune width of the name column. Both top-level
