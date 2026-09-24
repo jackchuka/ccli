@@ -142,3 +142,96 @@ func TestLoadMergedSettingsDefaults(t *testing.T) {
 		t.Errorf("excludes = %v, want empty", got.ClaudeMdExcludes)
 	}
 }
+
+func TestParseInstructionMode(t *testing.T) {
+	tests := []struct {
+		in   string
+		want claudecode.InstructionMode
+	}{
+		{"claude-md-or-agents-md", claudecode.ModeClaudeMDOrAgentsMD},
+		{"claude-md-and-agents-md", claudecode.ModeClaudeMDAndAgentsMD},
+		{"claude-md", claudecode.ModeClaudeMDOnly},
+		{"managed-only", claudecode.ModeManagedOnly},
+		{"", claudecode.ModeClaudeMDOrAgentsMD},
+		{"nonsense", claudecode.ModeClaudeMDOrAgentsMD},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := claudecode.ParseInstructionMode(tt.in); got != tt.want {
+				t.Errorf("ParseInstructionMode(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadMergedSettingsInstructionFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	cfg := func(mode string) string {
+		return `{"pluginConfigs":{"agents-md@builtin":{"options":{"instructionFiles":"` + mode + `"}}}}`
+	}
+
+	t.Run("read from the user layer", func(t *testing.T) {
+		got := claudecode.LoadMergedSettings(claudecode.Paths{
+			SettingsFile: write("user1.json", cfg("claude-md")),
+		})
+		if got.InstructionFiles != "claude-md" {
+			t.Errorf("InstructionFiles = %q, want %q", got.InstructionFiles, "claude-md")
+		}
+	})
+
+	t.Run("managed beats user", func(t *testing.T) {
+		got := claudecode.LoadMergedSettings(claudecode.Paths{
+			SettingsFile:        write("user2.json", cfg("claude-md")),
+			ManagedSettingsFile: write("managed2.json", cfg("managed-only")),
+		})
+		if got.InstructionFiles != "managed-only" {
+			t.Errorf("InstructionFiles = %q, want %q", got.InstructionFiles, "managed-only")
+		}
+	})
+
+	// Claude Code ignores this key in project and local settings files. If ccli
+	// honored it there it would confidently disagree with Claude Code.
+	t.Run("ignored in the project layer", func(t *testing.T) {
+		got := claudecode.LoadMergedSettings(claudecode.Paths{
+			ProjectSettingsFile: write("project3.json", cfg("claude-md")),
+		})
+		if got.InstructionFiles != "" {
+			t.Errorf("InstructionFiles = %q, want empty: a project settings file must not set it", got.InstructionFiles)
+		}
+	})
+
+	t.Run("ignored in the local layer", func(t *testing.T) {
+		got := claudecode.LoadMergedSettings(claudecode.Paths{
+			LocalSettingsFile: write("local4.json", cfg("managed-only")),
+		})
+		if got.InstructionFiles != "" {
+			t.Errorf("InstructionFiles = %q, want empty: a local settings file must not set it", got.InstructionFiles)
+		}
+	})
+
+	t.Run("a project layer cannot override the user layer", func(t *testing.T) {
+		got := claudecode.LoadMergedSettings(claudecode.Paths{
+			SettingsFile:        write("user5.json", cfg("claude-md")),
+			ProjectSettingsFile: write("project5.json", cfg("managed-only")),
+		})
+		if got.InstructionFiles != "claude-md" {
+			t.Errorf("InstructionFiles = %q, want %q", got.InstructionFiles, "claude-md")
+		}
+	})
+
+	t.Run("absent key leaves it empty", func(t *testing.T) {
+		got := claudecode.LoadMergedSettings(claudecode.Paths{
+			SettingsFile: write("user6.json", `{"model":"opus"}`),
+		})
+		if got.InstructionFiles != "" {
+			t.Errorf("InstructionFiles = %q, want empty", got.InstructionFiles)
+		}
+	})
+}

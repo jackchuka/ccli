@@ -41,6 +41,18 @@ type MCPServerEntry struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
+// agentsMDPluginID is the built-in plugin whose options carry the
+// instructionFiles setting.
+const agentsMDPluginID = "agents-md@builtin"
+
+// PluginConfig is one entry of settings.json's pluginConfigs map. Only the
+// options this audit reads are modeled.
+type PluginConfig struct {
+	Options struct {
+		InstructionFiles string `json:"instructionFiles"`
+	} `json:"options"`
+}
+
 // Settings represents ~/.claude/settings.json.
 type Settings struct {
 	Model          string          `json:"model"`
@@ -48,10 +60,11 @@ type Settings struct {
 	Permissions    struct {
 		Allow []string `json:"allow"`
 	} `json:"permissions"`
-	ClaudeMd            string   `json:"claudeMd"`
-	ClaudeMdExcludes    []string `json:"claudeMdExcludes"`
-	AutoMemoryEnabled   *bool    `json:"autoMemoryEnabled"`
-	AutoMemoryDirectory string   `json:"autoMemoryDirectory"`
+	ClaudeMd            string                  `json:"claudeMd"`
+	ClaudeMdExcludes    []string                `json:"claudeMdExcludes"`
+	AutoMemoryEnabled   *bool                   `json:"autoMemoryEnabled"`
+	AutoMemoryDirectory string                  `json:"autoMemoryDirectory"`
+	PluginConfigs       map[string]PluginConfig `json:"pluginConfigs"`
 }
 
 // LoadConfig reads and parses a claude.json file by full path.
@@ -115,14 +128,15 @@ func LoadSettings(path string) (*Settings, error) {
 // MergedSettings holds the memory-relevant settings resolved across every
 // settings layer. Claude Code's precedence is managed > local > project >
 // user for most scalars, while claudeMdExcludes arrays merge across all
-// layers and ClaudeMd is managed-only: Claude Code honors claudeMd in
-// managed and policy settings and ignores it everywhere else, so widening it
-// to the other layers would report memory that never loads.
+// layers. Two keys are narrower: ClaudeMd is honored only in managed and
+// policy settings, and InstructionFiles only in user, --settings and managed
+// settings. Widening either would report memory that never loads.
 type MergedSettings struct {
 	ClaudeMd            string
 	ClaudeMdExcludes    []string
 	AutoMemoryEnabled   bool
 	AutoMemoryDirectory string
+	InstructionFiles    string
 }
 
 // LoadMergedSettings reads every settings layer the audit cares about.
@@ -152,6 +166,13 @@ func LoadMergedSettings(p Paths) *MergedSettings {
 		// ignores it in user, project, and local settings.
 		if path == p.ManagedSettingsFile && s.ClaudeMd != "" {
 			merged.ClaudeMd = s.ClaudeMd
+		}
+		// Claude Code reads instructionFiles from user, --settings and managed
+		// settings, and ignores it in project and local settings files.
+		if path == p.SettingsFile || path == p.ManagedSettingsFile {
+			if v := s.PluginConfigs[agentsMDPluginID].Options.InstructionFiles; v != "" {
+				merged.InstructionFiles = v
+			}
 		}
 	}
 	return merged
