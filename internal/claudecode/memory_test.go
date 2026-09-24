@@ -1639,3 +1639,152 @@ func TestOnDemandAgentsMDRespectsPerDirectoryClaudeMD(t *testing.T) {
 		t.Errorf("got %q", agentsPaths[0])
 	}
 }
+
+func TestShadowingClaudeMD(t *testing.T) {
+	t.Run("none", func(t *testing.T) {
+		root := t.TempDir()
+		writeFixtureFile(t, filepath.Join(root, "repo", "AGENTS.md"), "a\n")
+		if got := claudecode.ShadowingClaudeMD(filepath.Join(root, "repo")); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("an ancestor's .claude/CLAUDE.md shadows, though it never loads", func(t *testing.T) {
+		root := t.TempDir()
+		sub := filepath.Join(root, "repo", "pkg")
+		writeFixtureFile(t, filepath.Join(root, "repo", ".claude", "CLAUDE.md"), "c\n")
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := claudecode.ShadowingClaudeMD(sub)
+		if !strings.HasSuffix(got, filepath.Join("repo", ".claude", "CLAUDE.md")) {
+			t.Errorf("got %q, want the ancestor's .claude/CLAUDE.md", got)
+		}
+	})
+
+	t.Run("CLAUDE.local.md alone shadows", func(t *testing.T) {
+		root := t.TempDir()
+		writeFixtureFile(t, filepath.Join(root, "CLAUDE.local.md"), "l\n")
+		if got := claudecode.ShadowingClaudeMD(root); got == "" {
+			t.Error("a CLAUDE.local.md must shadow AGENTS.md")
+		}
+	})
+
+	t.Run("nearest wins", func(t *testing.T) {
+		root := t.TempDir()
+		sub := filepath.Join(root, "repo", "pkg")
+		writeFixtureFile(t, filepath.Join(root, "CLAUDE.md"), "far\n")
+		writeFixtureFile(t, filepath.Join(root, "repo", "CLAUDE.md"), "near\n")
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := claudecode.ShadowingClaudeMD(sub)
+		if !strings.HasSuffix(got, filepath.Join("repo", "CLAUDE.md")) {
+			t.Errorf("got %q, want the nearest CLAUDE.md", got)
+		}
+	})
+}
+
+// modeFiles builds a small launch tier: a managed file, a personal file, a
+// project CLAUDE.md, a project AGENTS.md, an auto index, and an on-demand file.
+func modeFiles() []agent.Memory {
+	return []agent.Memory{
+		{Path: "/mgd/CLAUDE.md", Scope: agent.ScopeManaged, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 1},
+		{Path: "/home/u/.claude/CLAUDE.md", Scope: agent.ScopePersonal, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 2},
+		{Path: "/repo/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 3},
+		{Path: "/repo/AGENTS.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindAgentsMD, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 4},
+		{Path: "/mem/MEMORY.md", Scope: agent.ScopeAuto, Kind: agent.MemoryKindAutoIndex, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 5},
+		{Path: "/repo/sub/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierOnDemand, Exists: true, Lines: 6},
+	}
+}
+
+func notLoadedPaths(files []agent.Memory) []string {
+	var out []string
+	for _, f := range files {
+		if f.NotLoaded {
+			out = append(out, f.Path)
+		}
+	}
+	return out
+}
+
+func TestApplyInstructionModeClaudeMDOnly(t *testing.T) {
+	files := modeFiles()
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOnly, "/repo")
+
+	got := notLoadedPaths(files)
+	if len(got) != 1 || got[0] != "/repo/AGENTS.md" {
+		t.Fatalf("got %v, want only the AGENTS.md", got)
+	}
+	if len(files[3].Warnings) == 0 || !strings.Contains(files[3].Warnings[0], "claude-md") {
+		t.Errorf("warning should name the mode: %v", files[3].Warnings)
+	}
+}
+
+func TestApplyInstructionModeManagedOnly(t *testing.T) {
+	files := modeFiles()
+	reportWarnings := claudecode.ApplyInstructionMode(files, claudecode.ModeManagedOnly, "/repo")
+
+	// Managed CLAUDE.md and the auto index survive; everything else in the
+	// launch tier does not. The on-demand entry is untouched.
+	for _, tc := range []struct {
+		idx  int
+		want bool
+	}{{0, false}, {1, true}, {2, true}, {3, true}, {4, false}, {5, false}} {
+		if files[tc.idx].NotLoaded != tc.want {
+			t.Errorf("files[%d] (%s) NotLoaded = %v, want %v", tc.idx, files[tc.idx].Path, files[tc.idx].NotLoaded, tc.want)
+		}
+	}
+	if len(reportWarnings) == 0 || !strings.Contains(reportWarnings[0], "rules") {
+		t.Errorf("managed-only should warn that rules are excluded too: %v", reportWarnings)
+	}
+}
+
+func TestApplyInstructionModeDefaultShadows(t *testing.T) {
+	root := t.TempDir()
+	writeFixtureFile(t, filepath.Join(root, "CLAUDE.md"), "c\n")
+
+	files := modeFiles()
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, root)
+
+	if !files[3].NotLoaded {
+		t.Fatal("AGENTS.md should be shadowed when a CLAUDE.md exists")
+	}
+	if len(files[3].Warnings) == 0 || !strings.Contains(files[3].Warnings[0], "shadowed by") {
+		t.Errorf("warning should name the shadowing file: %v", files[3].Warnings)
+	}
+	if files[2].NotLoaded {
+		t.Error("the CLAUDE.md itself must still load")
+	}
+}
+
+func TestApplyInstructionModeDefaultDoesNotShadowOnUserOrManaged(t *testing.T) {
+	// The working directory has no CLAUDE.md-family file. A personal and a
+	// managed CLAUDE.md are present in the tree and must NOT shadow AGENTS.md.
+	root := t.TempDir()
+
+	files := modeFiles()
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, root)
+
+	if files[3].NotLoaded {
+		t.Errorf("a personal or managed CLAUDE.md must not shadow AGENTS.md: %+v", files[3])
+	}
+}
+
+func TestApplyInstructionModeAndSkipsAlreadyImported(t *testing.T) {
+	files := []agent.Memory{
+		{Path: "/repo/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch, Exists: true, Imports: []agent.Memory{
+			{Path: "/repo/AGENTS.md", Kind: agent.MemoryKindImport, Tier: agent.MemoryTierLaunch, Exists: true, Depth: 1},
+		}},
+		{Path: "/repo/AGENTS.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindAgentsMD, Tier: agent.MemoryTierLaunch, Exists: true},
+		{Path: "/repo/other/AGENTS.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindAgentsMD, Tier: agent.MemoryTierLaunch, Exists: true},
+	}
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDAndAgentsMD, "/repo")
+
+	if !files[1].NotLoaded {
+		t.Error("an AGENTS.md already pulled in by an import must not be counted twice")
+	}
+	if files[2].NotLoaded {
+		t.Error("an AGENTS.md that nothing imports must still load in claude-md-and-agents-md mode")
+	}
+}

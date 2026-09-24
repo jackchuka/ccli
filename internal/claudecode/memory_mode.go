@@ -1,5 +1,11 @@
 package claudecode
 
+import (
+	"fmt"
+
+	"github.com/jackchuka/ccli/internal/agent"
+)
+
 // InstructionMode selects which instruction files Claude Code loads. It is
 // configured per install under the built-in agents-md plugin, and it changes
 // what the whole audit means: the same repository reports differently under
@@ -29,5 +35,113 @@ func ParseInstructionMode(v string) InstructionMode {
 		return m
 	default:
 		return ModeClaudeMDOrAgentsMD
+	}
+}
+
+// shadowingClaudeMD returns the CLAUDE.md-family file that stops Claude Code
+// reading AGENTS.md, or "" when none exists. It walks the ancestor chain
+// itself rather than scanning the discovered tree, because the files that
+// count here are not the files that load: an ancestor's .claude/CLAUDE.md
+// shadows AGENTS.md although it is never loaded. It searches nearest-first so
+// the warning names the file a user would go and look at.
+func shadowingClaudeMD(cwd string) string {
+	chain := ancestorDirs(cwd)
+	for i := len(chain) - 1; i >= 0; i-- {
+		if p := claudeMDIn(chain[i]); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// applyInstructionMode records which discovered files the active mode does not
+// read. It marks rather than filters, so a shadowed file still appears in the
+// audit with an explanation — a user who keeps both a CLAUDE.md and an
+// AGENTS.md most needs to know that one of them is doing nothing. The strings
+// it returns are report-level warnings with no file to hang from.
+func applyInstructionMode(files []agent.Memory, mode InstructionMode, cwd string) []string {
+	switch mode {
+	case ModeClaudeMDOnly:
+		markAgentsMD(files, fmt.Sprintf("not read in %s mode", ModeClaudeMDOnly))
+	case ModeManagedOnly:
+		markManagedOnly(files)
+		return []string{fmt.Sprintf(
+			"%s mode also excludes .claude/rules/, which this audit does not enumerate; run ccli rules to see them",
+			ModeManagedOnly)}
+	case ModeClaudeMDAndAgentsMD:
+		markAlreadyImportedAgentsMD(files)
+	default:
+		if shadow := shadowingClaudeMD(cwd); shadow != "" {
+			markAgentsMD(files, fmt.Sprintf("shadowed by %s; not read in %s mode", shadow, ModeClaudeMDOrAgentsMD))
+		}
+	}
+	return nil
+}
+
+// markAgentsMD marks every AGENTS.md in the tree as not loading.
+func markAgentsMD(files []agent.Memory, reason string) {
+	for i := range files {
+		if files[i].Kind == agent.MemoryKindAgentsMD {
+			files[i].NotLoaded = true
+			files[i].Warnings = append(files[i].Warnings, reason)
+		}
+		markAgentsMD(files[i].Imports, reason)
+	}
+}
+
+// markManagedOnly leaves the organization's managed CLAUDE.md and auto memory
+// loading and marks the rest of the launch tier. On-demand entries are
+// untouched: a subdirectory's CLAUDE.md still loads when Claude reads a file
+// there, even in this mode.
+func markManagedOnly(files []agent.Memory) {
+	reason := fmt.Sprintf("not read in %s mode", ModeManagedOnly)
+	for i := range files {
+		if files[i].Tier != agent.MemoryTierLaunch {
+			continue
+		}
+		if files[i].Scope == agent.ScopeManaged || files[i].Kind == agent.MemoryKindAutoIndex {
+			continue
+		}
+		files[i].NotLoaded = true
+		files[i].Warnings = append(files[i].Warnings, reason)
+		markSubtreeNotLoaded(files[i].Imports, reason)
+	}
+}
+
+// markSubtreeNotLoaded cascades a refusal onto imports, which cannot load when
+// the file importing them does not.
+func markSubtreeNotLoaded(files []agent.Memory, reason string) {
+	for i := range files {
+		files[i].NotLoaded = true
+		files[i].Warnings = append(files[i].Warnings, reason)
+		markSubtreeNotLoaded(files[i].Imports, reason)
+	}
+}
+
+// markAlreadyImportedAgentsMD marks an AGENTS.md that some other file already
+// pulls in. Claude Code skips one it has already loaded, so counting the
+// top-level entry as well would double its contribution to the totals.
+func markAlreadyImportedAgentsMD(files []agent.Memory) {
+	loaded := map[string]bool{}
+	var collect func(ms []agent.Memory, nested bool)
+	collect = func(ms []agent.Memory, nested bool) {
+		for _, m := range ms {
+			if nested && m.Path != "" {
+				loaded[m.Path] = true
+			}
+			if m.LinkTarget != "" {
+				loaded[m.LinkTarget] = true
+			}
+			collect(m.Imports, true)
+		}
+	}
+	collect(files, false)
+
+	for i := range files {
+		if files[i].Kind == agent.MemoryKindAgentsMD && loaded[files[i].Path] {
+			files[i].NotLoaded = true
+			files[i].Warnings = append(files[i].Warnings,
+				"already loaded through an import, so Claude Code does not read it twice")
+		}
 	}
 }

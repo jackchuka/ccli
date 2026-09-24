@@ -7,13 +7,15 @@ import "github.com/jackchuka/ccli/internal/agent"
 // production build carrying a second, exported copy of the package's API.
 
 var (
-	ReadMemoryFile   = readMemoryFile
-	GlobMatch        = globMatch
-	ExpandTilde      = expandTilde
-	ParseImports     = parseImports
-	ApplyExclusions  = applyExclusions
-	FlattenMemory    = flattenMemory
-	AnnotateWarnings = annotateWarnings
+	ReadMemoryFile       = readMemoryFile
+	GlobMatch            = globMatch
+	ExpandTilde          = expandTilde
+	ParseImports         = parseImports
+	ApplyExclusions      = applyExclusions
+	FlattenMemory        = flattenMemory
+	AnnotateWarnings     = annotateWarnings
+	ApplyInstructionMode = applyInstructionMode
+	ShadowingClaudeMD    = shadowingClaudeMD
 )
 
 func MaxImportDepth() int { return maxImportDepth }
