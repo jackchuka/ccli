@@ -16,8 +16,10 @@ var memoryOnDemand bool
 var memoryCmd = &cobra.Command{
 	Use:   "memory",
 	Short: "Audit the memory files that load into a Claude Code session",
-	Long: "Reports which CLAUDE.md files, imports, and auto memory load for the\n" +
-		"current directory, in load order, with their context cost.\n\n" +
+	Long: "Reports which CLAUDE.md and AGENTS.md files, imports, and auto memory\n" +
+		"load for the current directory, in load order, with their context cost.\n" +
+		"Files the active instruction mode does not read are listed too, marked\n" +
+		"with the reason and left out of the totals.\n\n" +
 		"The audit reflects Claude Code's documented resolution rules. To confirm\n" +
 		"what a live session actually loaded, run /context in that session.",
 }
