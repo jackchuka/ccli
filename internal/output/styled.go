@@ -25,6 +25,9 @@ var (
 		"project":  {"○", lipgloss.NewStyle().Foreground(lipgloss.Color("#6BBF6B"))},
 		"personal": {"◇", lipgloss.NewStyle().Foreground(lipgloss.Color("#D4A843"))},
 		"plugin":   {"◆", lipgloss.NewStyle().Foreground(lipgloss.Color("#4DCFCF"))},
+		"managed":  {"▣", lipgloss.NewStyle().Foreground(lipgloss.Color("#C46B6B"))},
+		"local":    {"◐", lipgloss.NewStyle().Foreground(lipgloss.Color("#9B8BD4"))},
+		"auto":     {"◈", lipgloss.NewStyle().Foreground(lipgloss.Color("#4DCFCF"))},
 	}
 	defaultScopeStyle = struct {
 		bullet string

@@ -18,6 +18,12 @@ func getAgent() (agent.Agent, error) {
 	return claudecode.NewAgent(paths), nil
 }
 
+// getPaths exposes the agent's home/cwd resolution to renderers that need to
+// abbreviate paths; claudecode.Agent keeps its Paths private.
+func getPaths() (claudecode.Paths, error) {
+	return claudecode.DefaultPaths()
+}
+
 func getPrinter() (*output.Printer, error) {
 	f, err := output.ParseFormat(format)
 	if err != nil {
@@ -38,4 +44,13 @@ func renderScopeSummary(p *output.Printer, label string, counts map[agent.Scope]
 		}
 	}
 	return p.PrintText(summary.String())
+}
+
+// pluralize returns singular unmodified for a count of 1, and with a
+// trailing "s" otherwise, for count labels like "3 files".
+func pluralize(n int, singular string) string {
+	if n == 1 {
+		return singular
+	}
+	return singular + "s"
 }

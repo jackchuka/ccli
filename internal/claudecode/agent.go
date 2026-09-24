@@ -4,19 +4,26 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 // Paths holds the file paths the Agent reads from.
 type Paths struct {
-	ConfigFile   string // ~/.claude.json
-	SettingsFile string // ~/.claude/settings.json
-	MCPFile      string // .mcp.json (project root)
-	HomeDir      string // ~/.claude/
-	PluginsDir   string // ~/.claude/plugins/
-	SkillsDir    string // ~/.claude/skills/
-	RulesDir     string // ~/.claude/rules/
-	ProjectDir   string // current project .claude/
+	ConfigFile          string // ~/.claude.json
+	SettingsFile        string // ~/.claude/settings.json
+	ProjectSettingsFile string // .claude/settings.json
+	LocalSettingsFile   string // .claude/settings.local.json
+	ManagedPolicyFile   string // OS-specific managed CLAUDE.md
+	ManagedSettingsFile string // OS-specific managed-settings.json
+	MCPFile             string // .mcp.json (project root)
+	HomeDir             string // ~/.claude/
+	UserHomeDir         string // ~
+	CWD                 string // current working directory
+	PluginsDir          string // ~/.claude/plugins/
+	SkillsDir           string // ~/.claude/skills/
+	RulesDir            string // ~/.claude/rules/
+	ProjectDir          string // current project .claude/
 }
 
 // DefaultPaths builds Paths from the user's home and current working directory.
@@ -30,15 +37,22 @@ func DefaultPaths() (Paths, error) {
 		return Paths{}, fmt.Errorf("determining working directory: %w", err)
 	}
 	claudeHome := filepath.Join(home, ".claude")
+	managedPolicy, managedSettings := ManagedPaths(runtime.GOOS)
 	return Paths{
-		ConfigFile:   filepath.Join(home, ".claude.json"),
-		SettingsFile: filepath.Join(claudeHome, "settings.json"),
-		MCPFile:      filepath.Join(cwd, ".mcp.json"),
-		HomeDir:      claudeHome,
-		PluginsDir:   filepath.Join(claudeHome, "plugins"),
-		SkillsDir:    filepath.Join(claudeHome, "skills"),
-		RulesDir:     filepath.Join(claudeHome, "rules"),
-		ProjectDir:   filepath.Join(cwd, ".claude"),
+		ConfigFile:          filepath.Join(home, ".claude.json"),
+		SettingsFile:        filepath.Join(claudeHome, "settings.json"),
+		ProjectSettingsFile: filepath.Join(cwd, ".claude", "settings.json"),
+		LocalSettingsFile:   filepath.Join(cwd, ".claude", "settings.local.json"),
+		ManagedPolicyFile:   managedPolicy,
+		ManagedSettingsFile: managedSettings,
+		MCPFile:             filepath.Join(cwd, ".mcp.json"),
+		HomeDir:             claudeHome,
+		UserHomeDir:         home,
+		CWD:                 cwd,
+		PluginsDir:          filepath.Join(claudeHome, "plugins"),
+		SkillsDir:           filepath.Join(claudeHome, "skills"),
+		RulesDir:            filepath.Join(claudeHome, "rules"),
+		ProjectDir:          filepath.Join(cwd, ".claude"),
 	}, nil
 }
 

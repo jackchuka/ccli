@@ -41,6 +41,18 @@ type MCPServerEntry struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
+// agentsMDPluginID is the built-in plugin whose options carry the
+// instructionFiles setting.
+const agentsMDPluginID = "agents-md@builtin"
+
+// PluginConfig is one entry of settings.json's pluginConfigs map. Only the
+// options this audit reads are modeled.
+type PluginConfig struct {
+	Options struct {
+		InstructionFiles string `json:"instructionFiles"`
+	} `json:"options"`
+}
+
 // Settings represents ~/.claude/settings.json.
 type Settings struct {
 	Model          string          `json:"model"`
@@ -48,6 +60,11 @@ type Settings struct {
 	Permissions    struct {
 		Allow []string `json:"allow"`
 	} `json:"permissions"`
+	ClaudeMd            string                  `json:"claudeMd"`
+	ClaudeMdExcludes    []string                `json:"claudeMdExcludes"`
+	AutoMemoryEnabled   *bool                   `json:"autoMemoryEnabled"`
+	AutoMemoryDirectory string                  `json:"autoMemoryDirectory"`
+	PluginConfigs       map[string]PluginConfig `json:"pluginConfigs"`
 }
 
 // LoadConfig reads and parses a claude.json file by full path.
@@ -106,4 +123,73 @@ func LoadSettings(path string) (*Settings, error) {
 		return nil, err
 	}
 	return &s, nil
+}
+
+// MergedSettings holds the memory-relevant settings resolved across every
+// settings layer. Claude Code's precedence is managed > local > project >
+// user for most scalars, while claudeMdExcludes arrays merge across all
+// layers. Two keys are narrower: ClaudeMd is honored only in managed and
+// policy settings, and InstructionFiles only in user, --settings and managed
+// settings. Widening either would report memory that never loads.
+type MergedSettings struct {
+	ClaudeMd            string
+	ClaudeMdExcludes    []string
+	AutoMemoryEnabled   bool
+	AutoMemoryDirectory string
+	InstructionFiles    string
+}
+
+// LoadMergedSettings reads every settings layer the audit cares about.
+// Missing or malformed files are skipped: an audit of a partly broken
+// configuration is more useful than an error.
+func LoadMergedSettings(p Paths) *MergedSettings {
+	merged := &MergedSettings{AutoMemoryEnabled: true}
+
+	// Lowest precedence first, so later layers overwrite scalars.
+	layers := []string{p.SettingsFile, p.ProjectSettingsFile, p.LocalSettingsFile, p.ManagedSettingsFile}
+	for _, path := range layers {
+		if path == "" {
+			continue
+		}
+		s, err := LoadSettings(path)
+		if err != nil {
+			continue
+		}
+		merged.ClaudeMdExcludes = append(merged.ClaudeMdExcludes, s.ClaudeMdExcludes...)
+		if s.AutoMemoryDirectory != "" {
+			merged.AutoMemoryDirectory = s.AutoMemoryDirectory
+		}
+		if s.AutoMemoryEnabled != nil {
+			merged.AutoMemoryEnabled = *s.AutoMemoryEnabled
+		}
+		// claudeMd only takes effect in managed/policy settings; Claude Code
+		// ignores it in user, project, and local settings.
+		if path == p.ManagedSettingsFile && s.ClaudeMd != "" {
+			merged.ClaudeMd = s.ClaudeMd
+		}
+		// Claude Code reads instructionFiles from user, --settings and managed
+		// settings, and ignores it in project and local settings files.
+		if path == p.SettingsFile || path == p.ManagedSettingsFile {
+			if v := s.PluginConfigs[agentsMDPluginID].Options.InstructionFiles; v != "" {
+				merged.InstructionFiles = v
+			}
+		}
+	}
+	return merged
+}
+
+// ManagedPaths returns the managed policy CLAUDE.md and managed-settings.json
+// locations for a GOOS value.
+func ManagedPaths(goos string) (string, string) {
+	switch goos {
+	case "darwin":
+		dir := "/Library/Application Support/ClaudeCode"
+		return dir + "/CLAUDE.md", dir + "/managed-settings.json"
+	case "windows":
+		dir := `C:\Program Files\ClaudeCode`
+		return dir + `\CLAUDE.md`, dir + `\managed-settings.json`
+	default:
+		dir := "/etc/claude-code"
+		return dir + "/CLAUDE.md", dir + "/managed-settings.json"
+	}
 }

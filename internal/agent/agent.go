@@ -11,5 +11,7 @@ type Agent interface {
 	GetProject(path string) (*Project, error)
 	ListRules() ([]Rule, error)
 	GetRule(name string) (*Rule, error)
+	ListMemory() (*MemoryReport, error)
+	GetMemory(name string) (*Memory, error)
 	Info() (*InstallInfo, error)
 }

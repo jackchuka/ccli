@@ -30,6 +30,24 @@ func TestRenderScopeBullet(t *testing.T) {
 	}
 }
 
+func TestRenderScopeBulletMemoryScopes(t *testing.T) {
+	tests := []struct {
+		scope string
+		want  string
+	}{
+		{"managed", "▣"},
+		{"local", "◐"},
+		{"auto", "◈"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.scope, func(t *testing.T) {
+			if got := output.RenderScopeBullet(tt.scope, true); got != tt.want {
+				t.Errorf("RenderScopeBullet(%q) = %q, want %q", tt.scope, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMaskEnvValue(t *testing.T) {
 	tests := []struct {
 		key  string

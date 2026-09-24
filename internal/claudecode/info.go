@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,6 +84,11 @@ func (a *Agent) Info() (*agent.InstallInfo, error) {
 		info.SkillCount = len(skills)
 	}
 
+	// Memory count: launch-tier files only, matching `ccli memory list`.
+	// The launch-only audit skips the on-demand tier's recursive directory
+	// walk, which this dashboard would discard.
+	info.MemoryCount = a.launchMemoryReport().LaunchFiles
+
 	return info, nil
 }
 
@@ -116,7 +122,15 @@ func countLines(path string) int {
 		return 0
 	}
 	defer f.Close() //nolint:errcheck // read-only file
-	scanner := bufio.NewScanner(f)
+	return countLinesIn(f)
+}
+
+// countLinesIn counts lines from r, including a final line with no trailing
+// newline. A memory file may carry a single very long line, so the scanner's
+// token limit is raised past bufio's 64KB default to avoid silently stopping.
+func countLinesIn(r io.Reader) int {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), memoryHardByteLimit)
 	n := 0
 	for scanner.Scan() {
 		n++
