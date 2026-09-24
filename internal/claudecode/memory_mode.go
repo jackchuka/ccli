@@ -2,6 +2,8 @@ package claudecode
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/jackchuka/ccli/internal/agent"
 )
@@ -44,10 +46,35 @@ func ParseInstructionMode(v string) InstructionMode {
 // count here are not the files that load: an ancestor's .claude/CLAUDE.md
 // shadows AGENTS.md although it is never loaded. It searches nearest-first so
 // the warning names the file a user would go and look at.
-func shadowingClaudeMD(cwd string) string {
+//
+// personalDir is the personal config directory (Paths.HomeDir, ~/.claude).
+// The personal and managed CLAUDE.md are excluded from shadowing by scope,
+// but this predicate has no scope to read, only paths to stat, so the one
+// path that is both an ancestor candidate and the personal file —
+// <homeDir>/.claude/CLAUDE.md, when the working directory is under $HOME —
+// must be skipped explicitly. The managed CLAUDE.md needs no equivalent
+// guard: its OS-specific path is never an ancestor of a working directory.
+func shadowingClaudeMD(cwd, personalDir string) string {
 	chain := ancestorDirs(cwd)
 	for i := len(chain) - 1; i >= 0; i-- {
-		if p := claudeMDIn(chain[i]); p != "" {
+		if p := claudeMDInExceptPersonal(chain[i], personalDir); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// claudeMDInExceptPersonal mirrors claudeMDIn's candidate list and priority
+// order, but skips the .claude/CLAUDE.md candidate when dir's .claude is the
+// personal config directory itself — that candidate is the personal memory
+// file, not a project one, and must not shadow.
+func claudeMDInExceptPersonal(dir, personalDir string) string {
+	for _, name := range []string{"CLAUDE.md", filepath.Join(".claude", "CLAUDE.md"), "CLAUDE.local.md"} {
+		if personalDir != "" && name == filepath.Join(".claude", "CLAUDE.md") && filepath.Join(dir, ".claude") == personalDir {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
 			return p
 		}
 	}
@@ -59,7 +86,7 @@ func shadowingClaudeMD(cwd string) string {
 // audit with an explanation — a user who keeps both a CLAUDE.md and an
 // AGENTS.md most needs to know that one of them is doing nothing. The strings
 // it returns are report-level warnings with no file to hang from.
-func applyInstructionMode(files []agent.Memory, mode InstructionMode, cwd string) []string {
+func applyInstructionMode(files []agent.Memory, mode InstructionMode, cwd, personalDir string) []string {
 	switch mode {
 	case ModeClaudeMDOnly:
 		markAgentsMD(files, fmt.Sprintf("not read in %s mode", ModeClaudeMDOnly))
@@ -71,21 +98,25 @@ func applyInstructionMode(files []agent.Memory, mode InstructionMode, cwd string
 	case ModeClaudeMDAndAgentsMD:
 		markAlreadyImportedAgentsMD(files)
 	default:
-		if shadow := shadowingClaudeMD(cwd); shadow != "" {
+		if shadow := shadowingClaudeMD(cwd, personalDir); shadow != "" {
 			markAgentsMD(files, fmt.Sprintf("shadowed by %s; not read in %s mode", shadow, ModeClaudeMDOrAgentsMD))
 		}
 	}
 	return nil
 }
 
-// markAgentsMD marks every AGENTS.md in the tree as not loading.
+// markAgentsMD marks each top-level AGENTS.md as not loading. It does not
+// recurse into Imports: an import node is always constructed with
+// MemoryKindImport regardless of what file it targets, so it can never match
+// MemoryKindAgentsMD — an explicit @AGENTS.md import is read whatever the
+// mode, since the mode governs discovery, not an explicit request to include
+// a file.
 func markAgentsMD(files []agent.Memory, reason string) {
 	for i := range files {
 		if files[i].Kind == agent.MemoryKindAgentsMD {
 			files[i].NotLoaded = true
 			files[i].Warnings = append(files[i].Warnings, reason)
 		}
-		markAgentsMD(files[i].Imports, reason)
 	}
 }
 
@@ -126,7 +157,11 @@ func markAlreadyImportedAgentsMD(files []agent.Memory) {
 	var collect func(ms []agent.Memory, nested bool)
 	collect = func(ms []agent.Memory, nested bool) {
 		for _, m := range ms {
-			if nested && m.Path != "" {
+			// A node past the hop limit, or one that cycles back to its own
+			// ancestor, is recorded but never loaded; if it happens to name
+			// an AGENTS.md, that copy contributes nothing, so it must not
+			// suppress the top-level AGENTS.md as "already loaded".
+			if nested && m.Path != "" && m.Loads() {
 				loaded[m.Path] = true
 			}
 			if m.LinkTarget != "" {

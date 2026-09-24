@@ -1644,7 +1644,7 @@ func TestShadowingClaudeMD(t *testing.T) {
 	t.Run("none", func(t *testing.T) {
 		root := t.TempDir()
 		writeFixtureFile(t, filepath.Join(root, "repo", "AGENTS.md"), "a\n")
-		if got := claudecode.ShadowingClaudeMD(filepath.Join(root, "repo")); got != "" {
+		if got := claudecode.ShadowingClaudeMD(filepath.Join(root, "repo"), ""); got != "" {
 			t.Errorf("got %q, want empty", got)
 		}
 	})
@@ -1656,7 +1656,7 @@ func TestShadowingClaudeMD(t *testing.T) {
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		got := claudecode.ShadowingClaudeMD(sub)
+		got := claudecode.ShadowingClaudeMD(sub, "")
 		if !strings.HasSuffix(got, filepath.Join("repo", ".claude", "CLAUDE.md")) {
 			t.Errorf("got %q, want the ancestor's .claude/CLAUDE.md", got)
 		}
@@ -1665,7 +1665,7 @@ func TestShadowingClaudeMD(t *testing.T) {
 	t.Run("CLAUDE.local.md alone shadows", func(t *testing.T) {
 		root := t.TempDir()
 		writeFixtureFile(t, filepath.Join(root, "CLAUDE.local.md"), "l\n")
-		if got := claudecode.ShadowingClaudeMD(root); got == "" {
+		if got := claudecode.ShadowingClaudeMD(root, ""); got == "" {
 			t.Error("a CLAUDE.local.md must shadow AGENTS.md")
 		}
 	})
@@ -1678,9 +1678,38 @@ func TestShadowingClaudeMD(t *testing.T) {
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		got := claudecode.ShadowingClaudeMD(sub)
+		got := claudecode.ShadowingClaudeMD(sub, "")
 		if !strings.HasSuffix(got, filepath.Join("repo", "CLAUDE.md")) {
 			t.Errorf("got %q, want the nearest CLAUDE.md", got)
+		}
+	})
+
+	t.Run("the personal CLAUDE.md inside the home config dir does not shadow", func(t *testing.T) {
+		root := t.TempDir()
+		home := filepath.Join(root, "home")
+		personalDir := filepath.Join(home, ".claude")
+		proj := filepath.Join(home, "proj")
+		writeFixtureFile(t, filepath.Join(personalDir, "CLAUDE.md"), "personal\n")
+		if err := os.MkdirAll(proj, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := claudecode.ShadowingClaudeMD(proj, personalDir); got != "" {
+			t.Errorf("got %q, want empty: the personal CLAUDE.md must not shadow", got)
+		}
+	})
+
+	t.Run("a plain CLAUDE.md directly in the home directory still shadows", func(t *testing.T) {
+		root := t.TempDir()
+		home := filepath.Join(root, "home")
+		personalDir := filepath.Join(home, ".claude")
+		proj := filepath.Join(home, "proj")
+		writeFixtureFile(t, filepath.Join(home, "CLAUDE.md"), "home\n")
+		if err := os.MkdirAll(proj, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := claudecode.ShadowingClaudeMD(proj, personalDir)
+		if !strings.HasSuffix(got, filepath.Join("home", "CLAUDE.md")) {
+			t.Errorf("got %q, want the home directory's own CLAUDE.md", got)
 		}
 	})
 }
@@ -1710,7 +1739,7 @@ func notLoadedPaths(files []agent.Memory) []string {
 
 func TestApplyInstructionModeClaudeMDOnly(t *testing.T) {
 	files := modeFiles()
-	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOnly, "/repo")
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOnly, "/repo", "")
 
 	got := notLoadedPaths(files)
 	if len(got) != 1 || got[0] != "/repo/AGENTS.md" {
@@ -1723,7 +1752,7 @@ func TestApplyInstructionModeClaudeMDOnly(t *testing.T) {
 
 func TestApplyInstructionModeManagedOnly(t *testing.T) {
 	files := modeFiles()
-	reportWarnings := claudecode.ApplyInstructionMode(files, claudecode.ModeManagedOnly, "/repo")
+	reportWarnings := claudecode.ApplyInstructionMode(files, claudecode.ModeManagedOnly, "/repo", "")
 
 	// Managed CLAUDE.md and the auto index survive; everything else in the
 	// launch tier does not. The on-demand entry is untouched.
@@ -1745,7 +1774,7 @@ func TestApplyInstructionModeDefaultShadows(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(root, "CLAUDE.md"), "c\n")
 
 	files := modeFiles()
-	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, root)
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, root, "")
 
 	if !files[3].NotLoaded {
 		t.Fatal("AGENTS.md should be shadowed when a CLAUDE.md exists")
@@ -1759,16 +1788,46 @@ func TestApplyInstructionModeDefaultShadows(t *testing.T) {
 }
 
 func TestApplyInstructionModeDefaultDoesNotShadowOnUserOrManaged(t *testing.T) {
-	// The working directory has no CLAUDE.md-family file. A personal and a
-	// managed CLAUDE.md are present in the tree and must NOT shadow AGENTS.md.
-	root := t.TempDir()
+	t.Run("personal CLAUDE.md inside the home config dir does not shadow", func(t *testing.T) {
+		// A real requirement, not the discovered entries: the one way the
+		// personal CLAUDE.md could leak into shadowing is by being an
+		// ancestor of cwd, so cwd must actually sit under a fake $HOME.
+		root := t.TempDir()
+		home := filepath.Join(root, "home")
+		personalDir := filepath.Join(home, ".claude")
+		proj := filepath.Join(home, "proj")
+		writeFixtureFile(t, filepath.Join(personalDir, "CLAUDE.md"), "personal\n")
+		if err := os.MkdirAll(proj, 0o755); err != nil {
+			t.Fatal(err)
+		}
 
-	files := modeFiles()
-	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, root)
+		files := modeFiles()
+		claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, proj, personalDir)
 
-	if files[3].NotLoaded {
-		t.Errorf("a personal or managed CLAUDE.md must not shadow AGENTS.md: %+v", files[3])
-	}
+		if files[3].NotLoaded {
+			t.Errorf("the personal CLAUDE.md must not shadow AGENTS.md: %+v", files[3])
+		}
+	})
+
+	t.Run("a plain CLAUDE.md in the home directory still shadows", func(t *testing.T) {
+		// The exemption must not widen to cover the whole home directory:
+		// $HOME/CLAUDE.md is an ordinary ancestor file and must still shadow.
+		root := t.TempDir()
+		home := filepath.Join(root, "home")
+		personalDir := filepath.Join(home, ".claude")
+		proj := filepath.Join(home, "proj")
+		writeFixtureFile(t, filepath.Join(home, "CLAUDE.md"), "home\n")
+		if err := os.MkdirAll(proj, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		files := modeFiles()
+		claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, proj, personalDir)
+
+		if !files[3].NotLoaded {
+			t.Error("a CLAUDE.md directly in the home directory must still shadow AGENTS.md")
+		}
+	})
 }
 
 func TestApplyInstructionModeAndSkipsAlreadyImported(t *testing.T) {
@@ -1779,12 +1838,30 @@ func TestApplyInstructionModeAndSkipsAlreadyImported(t *testing.T) {
 		{Path: "/repo/AGENTS.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindAgentsMD, Tier: agent.MemoryTierLaunch, Exists: true},
 		{Path: "/repo/other/AGENTS.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindAgentsMD, Tier: agent.MemoryTierLaunch, Exists: true},
 	}
-	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDAndAgentsMD, "/repo")
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDAndAgentsMD, "/repo", "")
 
 	if !files[1].NotLoaded {
 		t.Error("an AGENTS.md already pulled in by an import must not be counted twice")
 	}
 	if files[2].NotLoaded {
 		t.Error("an AGENTS.md that nothing imports must still load in claude-md-and-agents-md mode")
+	}
+}
+
+func TestApplyInstructionModeAndDoesNotSuppressUnloadedImport(t *testing.T) {
+	// The nested AGENTS.md is itself past the hop limit and never loads, so
+	// it must not suppress the top-level AGENTS.md as "already imported" —
+	// neither copy would load, and the file would vanish from the totals.
+	files := []agent.Memory{
+		{Path: "/repo/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch, Exists: true, Imports: []agent.Memory{
+			{Path: "/repo/AGENTS.md", Kind: agent.MemoryKindImport, Tier: agent.MemoryTierLaunch, Exists: true, Depth: 6, NotLoaded: true,
+				Warnings: []string{"import exceeds the 5-hop depth limit and is not loaded"}},
+		}},
+		{Path: "/repo/AGENTS.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindAgentsMD, Tier: agent.MemoryTierLaunch, Exists: true},
+	}
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDAndAgentsMD, "/repo", "")
+
+	if files[1].NotLoaded {
+		t.Error("an AGENTS.md whose only import copy is over the hop limit must still load itself")
 	}
 }
