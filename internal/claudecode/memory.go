@@ -417,22 +417,9 @@ var skippedWalkDirs = map[string]bool{
 	"vendor":       true,
 }
 
-// claudeMDIn returns the path of the first CLAUDE.md-family file in dir, or
-// "" when the directory has none. Claude Code treats any of the three as a
-// reason to read CLAUDE.md instead of AGENTS.md.
-func claudeMDIn(dir string) string {
-	for _, name := range []string{"CLAUDE.md", filepath.Join(".claude", "CLAUDE.md"), "CLAUDE.local.md"} {
-		p := filepath.Join(dir, name)
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			return p
-		}
-	}
-	return ""
-}
-
-// onDemandSubdirFiles finds CLAUDE.md and CLAUDE.local.md below the working
-// directory. Claude Code loads these only when it reads files in those
-// directories, so they are reported separately from the launch tier.
+// onDemandSubdirFiles finds CLAUDE.md, CLAUDE.local.md and AGENTS.md below
+// the working directory. Claude Code loads these only when it reads files in
+// those directories, so they are reported separately from the launch tier.
 func (a *Agent) onDemandSubdirFiles() []agent.Memory {
 	if a.paths.CWD == "" {
 		return nil
@@ -459,11 +446,9 @@ func (a *Agent) onDemandSubdirFiles() []agent.Memory {
 		case "CLAUDE.local.md":
 			files = append(files, readMemoryFile(path, agent.ScopeLocal, agent.MemoryKindClaudeLocalMD, agent.MemoryTierOnDemand))
 		case "AGENTS.md":
-			// Per-directory test, not the global one: a subdirectory's own
-			// CLAUDE.md stops Claude Code reading its AGENTS.md.
-			if claudeMDIn(filepath.Dir(path)) != "" {
-				return nil
-			}
+			// Emitted unconditionally. Whether a subdirectory's own CLAUDE.md
+			// stops Claude Code reading it is a mode rule, and discovery runs
+			// before the mode is known; applyInstructionMode decides.
 			files = append(files, readMemoryFile(path, agent.ScopeProject, agent.MemoryKindAgentsMD, agent.MemoryTierOnDemand))
 		}
 		return nil

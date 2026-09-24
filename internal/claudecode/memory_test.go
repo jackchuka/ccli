@@ -1562,11 +1562,17 @@ func TestLaunchTierDiscoversAgentsMD(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(repo, ".claude", "AGENTS.md"), "repo dot agents\n")
 	writeFixtureFile(t, filepath.Join(paths.CWD, "AGENTS.md"), "api agents\n")
 	writeFixtureFile(t, filepath.Join(paths.CWD, ".claude", "AGENTS.md"), "api dot agents\n")
+	// The asymmetry this test exists for needs both halves on disk: the
+	// ancestor's .claude/CLAUDE.md must be there to show it is passed over.
+	writeFixtureFile(t, filepath.Join(repo, ".claude", "CLAUDE.md"), "repo dot claude\n")
 
 	var got []string
 	for _, f := range claudecode.NewAgent(paths).LaunchTierFiles() {
 		if f.Kind == agent.MemoryKindAgentsMD && f.Exists {
 			got = append(got, f.Path)
+		}
+		if f.Path == filepath.Join(repo, ".claude", "CLAUDE.md") {
+			t.Errorf("an ancestor's .claude/CLAUDE.md is not a launch-tier entry, only the working directory's is: %+v", f)
 		}
 	}
 	if len(got) != 4 {
@@ -1612,16 +1618,21 @@ func TestLaunchTierOmitsAbsentAgentsMD(t *testing.T) {
 	}
 }
 
-func TestOnDemandAgentsMDRespectsPerDirectoryClaudeMD(t *testing.T) {
+// TestOnDemandDiscoveryEmitsEveryAgentsMD pins the discovery half of
+// "discover everything, then mark what does not load". A subdirectory's own
+// CLAUDE.md is a rule of one mode, so discovery must not apply it: the entry
+// has to exist for the mode pass to have something to mark, and for the
+// on-demand count to be right in the modes that do read it.
+func TestOnDemandDiscoveryEmitsEveryAgentsMD(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
 
 	// Below the working directory: one subdirectory with only AGENTS.md, one
-	// where a CLAUDE.md of its own wins, and the never-read names.
+	// where a CLAUDE.md of its own sits beside it, and the never-read names.
 	writeFixtureFile(t, filepath.Join(root, "plain", "AGENTS.md"), "plain\n")
-	writeFixtureFile(t, filepath.Join(root, "shadowed", "AGENTS.md"), "shadowed\n")
-	writeFixtureFile(t, filepath.Join(root, "shadowed", "CLAUDE.md"), "wins\n")
+	writeFixtureFile(t, filepath.Join(root, "sibling", "AGENTS.md"), "sibling\n")
+	writeFixtureFile(t, filepath.Join(root, "sibling", "CLAUDE.md"), "wins\n")
 	writeFixtureFile(t, filepath.Join(root, "never", "AGENTS.local.md"), "no\n")
 	writeFixtureFile(t, filepath.Join(root, "never", "AGENTS.override.md"), "no\n")
 	writeFixtureFile(t, filepath.Join(root, ".agents", "AGENTS.md"), "no\n")
@@ -1632,11 +1643,12 @@ func TestOnDemandAgentsMDRespectsPerDirectoryClaudeMD(t *testing.T) {
 			agentsPaths = append(agentsPaths, f.Path)
 		}
 	}
-	if len(agentsPaths) != 1 {
-		t.Fatalf("got %v, want only plain/AGENTS.md", agentsPaths)
+	want := []string{
+		filepath.Join(root, "plain", "AGENTS.md"),
+		filepath.Join(root, "sibling", "AGENTS.md"),
 	}
-	if !strings.HasSuffix(agentsPaths[0], filepath.Join("plain", "AGENTS.md")) {
-		t.Errorf("got %q", agentsPaths[0])
+	if !reflect.DeepEqual(agentsPaths, want) {
+		t.Fatalf("got %v, want both %v: AGENTS.local.md, AGENTS.override.md and .agents/ stay out", agentsPaths, want)
 	}
 }
 
@@ -1714,18 +1726,45 @@ func TestShadowingClaudeMD(t *testing.T) {
 	})
 }
 
-// modeFiles builds a small launch tier: a managed file, a personal file, a
-// project CLAUDE.md, a project AGENTS.md, an auto index, and an on-demand file.
-func modeFiles() []agent.Memory {
+// modeFiles builds a small launch tier — a managed file, a personal file, a
+// project CLAUDE.md, a project AGENTS.md, an auto index — followed by three
+// on-demand entries: a CLAUDE.md, an AGENTS.md whose directory holds nothing
+// else, and an AGENTS.md with a sibling CLAUDE.md.
+//
+// The three on-demand entries are real paths under root, created here,
+// because the default mode's per-directory test stats the filesystem: fake
+// paths would make the result depend on whatever happens to exist there. The
+// launch-tier entries are never stat'd, so they stay fixed strings.
+func modeFiles(t *testing.T, root string) []agent.Memory {
+	t.Helper()
+	writeFixtureFile(t, filepath.Join(root, "sub", "CLAUDE.md"), "sub\n")
+	writeFixtureFile(t, filepath.Join(root, "plain", "AGENTS.md"), "plain\n")
+	writeFixtureFile(t, filepath.Join(root, "sibling", "AGENTS.md"), "sibling\n")
+	writeFixtureFile(t, filepath.Join(root, "sibling", "CLAUDE.md"), "wins\n")
+
 	return []agent.Memory{
 		{Path: "/mgd/CLAUDE.md", Scope: agent.ScopeManaged, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 1},
 		{Path: "/home/u/.claude/CLAUDE.md", Scope: agent.ScopePersonal, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 2},
 		{Path: "/repo/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 3},
 		{Path: "/repo/AGENTS.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindAgentsMD, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 4},
 		{Path: "/mem/MEMORY.md", Scope: agent.ScopeAuto, Kind: agent.MemoryKindAutoIndex, Tier: agent.MemoryTierLaunch, Exists: true, Lines: 5},
-		{Path: "/repo/sub/CLAUDE.md", Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierOnDemand, Exists: true, Lines: 6},
+		{Path: filepath.Join(root, "sub", "CLAUDE.md"), Scope: agent.ScopeProject, Kind: agent.MemoryKindClaudeMD, Tier: agent.MemoryTierOnDemand, Exists: true, Lines: 6},
+		{Path: filepath.Join(root, "plain", "AGENTS.md"), Scope: agent.ScopeProject, Kind: agent.MemoryKindAgentsMD, Tier: agent.MemoryTierOnDemand, Exists: true, Lines: 7},
+		{Path: filepath.Join(root, "sibling", "AGENTS.md"), Scope: agent.ScopeProject, Kind: agent.MemoryKindAgentsMD, Tier: agent.MemoryTierOnDemand, Exists: true, Lines: 8},
 	}
 }
+
+// The modeFiles indices the mode tests assert against.
+const (
+	modeIdxManaged = iota
+	modeIdxPersonal
+	modeIdxProjectClaudeMD
+	modeIdxLaunchAgentsMD
+	modeIdxAutoIndex
+	modeIdxOnDemandClaudeMD
+	modeIdxOnDemandAgentsMD
+	modeIdxOnDemandAgentsMDWithSibling
+)
 
 func notLoadedPaths(files []agent.Memory) []string {
 	var out []string
@@ -1738,28 +1777,50 @@ func notLoadedPaths(files []agent.Memory) []string {
 }
 
 func TestApplyInstructionModeClaudeMDOnly(t *testing.T) {
-	files := modeFiles()
-	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOnly, "/repo", "")
+	root := t.TempDir()
+	files := modeFiles(t, root)
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOnly, root, "")
 
+	// Changed with the tier-aware mode pass: this asserted a single refused
+	// path, which only held because discovery used to drop an on-demand
+	// AGENTS.md that had a sibling CLAUDE.md. Every AGENTS.md is refused in
+	// this mode, whatever its tier.
 	got := notLoadedPaths(files)
-	if len(got) != 1 || got[0] != "/repo/AGENTS.md" {
-		t.Fatalf("got %v, want only the AGENTS.md", got)
+	want := []string{
+		"/repo/AGENTS.md",
+		filepath.Join(root, "plain", "AGENTS.md"),
+		filepath.Join(root, "sibling", "AGENTS.md"),
 	}
-	if len(files[3].Warnings) == 0 || !strings.Contains(files[3].Warnings[0], "claude-md") {
-		t.Errorf("warning should name the mode: %v", files[3].Warnings)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want every AGENTS.md %v", got, want)
+	}
+	w := files[modeIdxLaunchAgentsMD].Warnings
+	if len(w) == 0 || !strings.Contains(w[0], "claude-md") {
+		t.Errorf("warning should name the mode: %v", w)
 	}
 }
 
 func TestApplyInstructionModeManagedOnly(t *testing.T) {
-	files := modeFiles()
-	reportWarnings := claudecode.ApplyInstructionMode(files, claudecode.ModeManagedOnly, "/repo", "")
+	root := t.TempDir()
+	files := modeFiles(t, root)
+	reportWarnings := claudecode.ApplyInstructionMode(files, claudecode.ModeManagedOnly, root, "")
 
 	// Managed CLAUDE.md and the auto index survive; everything else in the
-	// launch tier does not. The on-demand entry is untouched.
+	// launch tier does not. On demand, a subdirectory's CLAUDE.md still loads
+	// while its AGENTS.md does not.
 	for _, tc := range []struct {
 		idx  int
 		want bool
-	}{{0, false}, {1, true}, {2, true}, {3, true}, {4, false}, {5, false}} {
+	}{
+		{modeIdxManaged, false},
+		{modeIdxPersonal, true},
+		{modeIdxProjectClaudeMD, true},
+		{modeIdxLaunchAgentsMD, true},
+		{modeIdxAutoIndex, false},
+		{modeIdxOnDemandClaudeMD, false},
+		{modeIdxOnDemandAgentsMD, true},
+		{modeIdxOnDemandAgentsMDWithSibling, true},
+	} {
 		if files[tc.idx].NotLoaded != tc.want {
 			t.Errorf("files[%d] (%s) NotLoaded = %v, want %v", tc.idx, files[tc.idx].Path, files[tc.idx].NotLoaded, tc.want)
 		}
@@ -1769,20 +1830,82 @@ func TestApplyInstructionModeManagedOnly(t *testing.T) {
 	}
 }
 
+// TestApplyInstructionModeOnDemandAgentsMD pins the answer every mode owes an
+// on-demand AGENTS.md, which discovery no longer decides on its own. The
+// working directory holds no CLAUDE.md, so the default mode's global test
+// finds nothing and its per-directory narrowing is what shows.
+func TestApplyInstructionModeOnDemandAgentsMD(t *testing.T) {
+	for _, tt := range []struct {
+		mode        claudecode.InstructionMode
+		plain       bool
+		sibling     bool
+		siblingWant string
+	}{
+		{claudecode.ModeClaudeMDOrAgentsMD, false, true, "shadowed by ./sibling/CLAUDE.md"},
+		{claudecode.ModeClaudeMDAndAgentsMD, false, false, ""},
+		{claudecode.ModeClaudeMDOnly, true, true, "not read in claude-md mode"},
+		{claudecode.ModeManagedOnly, true, true, "not read in managed-only mode"},
+	} {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			root := t.TempDir()
+			files := modeFiles(t, root)
+			claudecode.ApplyInstructionMode(files, tt.mode, root, "")
+
+			plain, sibling := files[modeIdxOnDemandAgentsMD], files[modeIdxOnDemandAgentsMDWithSibling]
+			if plain.NotLoaded != tt.plain {
+				t.Errorf("plain/AGENTS.md NotLoaded = %v, want %v (warnings %v)", plain.NotLoaded, tt.plain, plain.Warnings)
+			}
+			if sibling.NotLoaded != tt.sibling {
+				t.Errorf("sibling/AGENTS.md NotLoaded = %v, want %v (warnings %v)", sibling.NotLoaded, tt.sibling, sibling.Warnings)
+			}
+			if tt.siblingWant == "" {
+				if len(sibling.Warnings) > 0 {
+					t.Errorf("unexpected warnings: %v", sibling.Warnings)
+				}
+				return
+			}
+			if len(sibling.Warnings) == 0 || !strings.Contains(sibling.Warnings[0], tt.siblingWant) {
+				t.Errorf("warning %v should contain %q", sibling.Warnings, tt.siblingWant)
+			}
+		})
+	}
+}
+
+// TestApplyInstructionModeDefaultShadowTakesPrecedence checks the message
+// when both of the default mode's tests fire: the global shadow gates the
+// whole branch, so it is the one a reader needs to act on.
+func TestApplyInstructionModeDefaultShadowTakesPrecedence(t *testing.T) {
+	root := t.TempDir()
+	files := modeFiles(t, root)
+	writeFixtureFile(t, filepath.Join(root, "CLAUDE.md"), "c\n")
+	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, root, "")
+
+	for _, idx := range []int{modeIdxOnDemandAgentsMD, modeIdxOnDemandAgentsMDWithSibling} {
+		f := files[idx]
+		if !f.NotLoaded {
+			t.Fatalf("%s should be refused when a root CLAUDE.md shadows the whole branch", f.Path)
+		}
+		if len(f.Warnings) == 0 || !strings.Contains(f.Warnings[0], "shadowed by ./CLAUDE.md") {
+			t.Errorf("%s: warning %v should name the global shadow", f.Path, f.Warnings)
+		}
+	}
+}
+
 func TestApplyInstructionModeDefaultShadows(t *testing.T) {
 	root := t.TempDir()
 	writeFixtureFile(t, filepath.Join(root, "CLAUDE.md"), "c\n")
 
-	files := modeFiles()
+	files := modeFiles(t, root)
 	claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, root, "")
 
-	if !files[3].NotLoaded {
+	agents := files[modeIdxLaunchAgentsMD]
+	if !agents.NotLoaded {
 		t.Fatal("AGENTS.md should be shadowed when a CLAUDE.md exists")
 	}
-	if len(files[3].Warnings) == 0 || !strings.Contains(files[3].Warnings[0], "shadowed by ./CLAUDE.md") {
-		t.Errorf("warning should name the shadowing file ./-relative to cwd: %v", files[3].Warnings)
+	if len(agents.Warnings) == 0 || !strings.Contains(agents.Warnings[0], "shadowed by ./CLAUDE.md") {
+		t.Errorf("warning should name the shadowing file ./-relative to cwd: %v", agents.Warnings)
 	}
-	if files[2].NotLoaded {
+	if files[modeIdxProjectClaudeMD].NotLoaded {
 		t.Error("the CLAUDE.md itself must still load")
 	}
 }
@@ -1801,11 +1924,11 @@ func TestApplyInstructionModeDefaultDoesNotShadowOnUserOrManaged(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		files := modeFiles()
+		files := modeFiles(t, t.TempDir())
 		claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, proj, personalDir)
 
-		if files[3].NotLoaded {
-			t.Errorf("the personal CLAUDE.md must not shadow AGENTS.md: %+v", files[3])
+		if files[modeIdxLaunchAgentsMD].NotLoaded {
+			t.Errorf("the personal CLAUDE.md must not shadow AGENTS.md: %+v", files[modeIdxLaunchAgentsMD])
 		}
 	})
 
@@ -1821,16 +1944,17 @@ func TestApplyInstructionModeDefaultDoesNotShadowOnUserOrManaged(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		files := modeFiles()
+		files := modeFiles(t, t.TempDir())
 		claudecode.ApplyInstructionMode(files, claudecode.ModeClaudeMDOrAgentsMD, proj, personalDir)
 
-		if !files[3].NotLoaded {
+		agents := files[modeIdxLaunchAgentsMD]
+		if !agents.NotLoaded {
 			t.Error("a CLAUDE.md directly in the home directory must still shadow AGENTS.md")
 		}
 		// proj is one level below home, so the shadowing CLAUDE.md is one
 		// level above cwd: it must render "../CLAUDE.md", not an absolute path.
-		if len(files[3].Warnings) == 0 || !strings.Contains(files[3].Warnings[0], "shadowed by ../CLAUDE.md") {
-			t.Errorf("warning should name the shadowing file relative to cwd: %v", files[3].Warnings)
+		if len(agents.Warnings) == 0 || !strings.Contains(agents.Warnings[0], "shadowed by ../CLAUDE.md") {
+			t.Errorf("warning should name the shadowing file relative to cwd: %v", agents.Warnings)
 		}
 	})
 }
@@ -1909,6 +2033,82 @@ func TestListMemoryReportsInstructionMode(t *testing.T) {
 	}
 	if !sawShadowWarning {
 		t.Errorf("the shadowing should surface as a warning: %v", report.Warnings)
+	}
+}
+
+// TestListMemorySubdirAgentsMDUnderRootClaudeMD pins the end-to-end answer
+// for the layout the two rules disagree about. The default mode's global test
+// gates the whole AGENTS.md branch, so a root CLAUDE.md suppresses a
+// subdirectory's AGENTS.md as well — but the row is still there, with its
+// reason. Under claude-md-and-agents-md the same file loads.
+func TestListMemorySubdirAgentsMDUnderRootClaudeMD(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		settings  string
+		notLoaded bool
+	}{
+		{"default", `{}`, true},
+		{"and", `{"pluginConfigs":{"agents-md@builtin":{"options":{"instructionFiles":"claude-md-and-agents-md"}}}}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, paths := agentsFixture(t)
+			writeFixtureFile(t, filepath.Join(paths.CWD, "CLAUDE.md"), "claude\n")
+			writeFixtureFile(t, filepath.Join(paths.CWD, "sub", "AGENTS.md"), "sub agents\n")
+			writeFixtureFile(t, paths.SettingsFile, tt.settings)
+
+			report, err := claudecode.NewAgent(paths).ListMemory()
+			if err != nil {
+				t.Fatalf("ListMemory: %v", err)
+			}
+
+			var sub *agent.Memory
+			for i, f := range report.Files {
+				if f.Path == filepath.Join(paths.CWD, "sub", "AGENTS.md") {
+					sub = &report.Files[i]
+				}
+			}
+			if sub == nil {
+				t.Fatalf("./sub/AGENTS.md must be listed whatever the mode: %+v", report.Files)
+			}
+			if report.OnDemandFiles != 1 {
+				t.Errorf("OnDemandFiles = %d, want 1", report.OnDemandFiles)
+			}
+			if sub.NotLoaded != tt.notLoaded {
+				t.Errorf("NotLoaded = %v, want %v (warnings %v)", sub.NotLoaded, tt.notLoaded, sub.Warnings)
+			}
+			if tt.notLoaded && (len(sub.Warnings) == 0 || !strings.Contains(sub.Warnings[0], "shadowed by ./CLAUDE.md")) {
+				t.Errorf("warnings %v should name the shadowing root CLAUDE.md", sub.Warnings)
+			}
+			if !tt.notLoaded && len(sub.Warnings) > 0 {
+				t.Errorf("a loading file needs no explanation: %v", sub.Warnings)
+			}
+		})
+	}
+}
+
+// TestShadowedAgentsMDSilencesItsImports covers the presentation half of a
+// refusal: content reached only through a file Claude Code does not read
+// never arrives, so it must not draw size advice.
+func TestShadowedAgentsMDSilencesItsImports(t *testing.T) {
+	root, paths := agentsFixture(t)
+	repo := filepath.Join(root, "repo")
+	writeFixtureFile(t, filepath.Join(repo, "CLAUDE.md"), "claude\n")
+	writeFixtureFile(t, filepath.Join(repo, "AGENTS.md"), "agents\n@big.md\n")
+	writeFixtureFile(t, filepath.Join(repo, "big.md"), strings.Repeat("x\n", 300))
+
+	report, err := claudecode.NewAgent(paths).ListMemory()
+	if err != nil {
+		t.Fatalf("ListMemory: %v", err)
+	}
+	for _, w := range report.Warnings {
+		if strings.Contains(w, "over the 200-line guideline") {
+			t.Errorf("an import of a shadowed AGENTS.md must not draw size advice: %q", w)
+		}
+	}
+	for _, f := range claudecode.FlattenMemory(report.Files) {
+		if f.Path == filepath.Join(repo, "big.md") && !f.NotLoaded {
+			t.Error("the refusal must cascade onto the shadowed file's imports")
+		}
 	}
 }
 

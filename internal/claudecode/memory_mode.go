@@ -65,6 +65,20 @@ func shadowingClaudeMD(cwd, personalDir string) string {
 	return ""
 }
 
+// claudeMDIn returns the path of the first CLAUDE.md-family file in dir, or
+// "" when the directory has none. In the default mode Claude Code treats any
+// of the three in a subdirectory as a reason to read that directory's
+// CLAUDE.md instead of its AGENTS.md.
+func claudeMDIn(dir string) string {
+	for _, name := range []string{"CLAUDE.md", filepath.Join(".claude", "CLAUDE.md"), "CLAUDE.local.md"} {
+		p := filepath.Join(dir, name)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
 // claudeMDInExceptPersonal mirrors claudeMDIn's candidate list and priority
 // order, but skips the .claude/CLAUDE.md candidate when dir's .claude is the
 // personal config directory itself — that candidate is the personal memory
@@ -99,11 +113,35 @@ func applyInstructionMode(files []agent.Memory, mode InstructionMode, cwd, perso
 	case ModeClaudeMDAndAgentsMD:
 		markAlreadyImportedAgentsMD(files)
 	default:
-		if shadow := shadowingClaudeMD(cwd, personalDir); shadow != "" {
-			markAgentsMD(files, fmt.Sprintf("shadowed by %s; not read in %s mode", relativeToCWD(cwd, shadow), ModeClaudeMDOrAgentsMD))
-		}
+		markDefaultModeAgentsMD(files, cwd, personalDir)
 	}
 	return nil
+}
+
+// markDefaultModeAgentsMD applies the default mode's two nested tests. The
+// global one — any CLAUDE.md-family file in the working directory or above —
+// gates the whole AGENTS.md branch, so when it finds a shadow nothing else
+// matters and every AGENTS.md is refused, on-demand entries included. Only
+// when it finds none does the per-directory narrowing apply, and it applies
+// to on-demand entries alone: a launch-tier AGENTS.md sits in a directory the
+// global test has already cleared.
+func markDefaultModeAgentsMD(files []agent.Memory, cwd, personalDir string) {
+	shadow := shadowingClaudeMD(cwd, personalDir)
+	markAgentsMDBy(files, func(m *agent.Memory) string {
+		switch {
+		case shadow != "":
+			return shadowReason(cwd, shadow)
+		case m.Tier == agent.MemoryTierOnDemand:
+			if sibling := claudeMDIn(filepath.Dir(m.Path)); sibling != "" {
+				return shadowReason(cwd, sibling)
+			}
+		}
+		return ""
+	})
+}
+
+func shadowReason(cwd, shadow string) string {
+	return fmt.Sprintf("shadowed by %s; not read in %s mode", relativeToCWD(cwd, shadow), ModeClaudeMDOrAgentsMD)
 }
 
 // relativeToCWD renders path relative to cwd, "./"-prefixed when it sits
@@ -122,29 +160,49 @@ func relativeToCWD(cwd, path string) string {
 	return "." + string(filepath.Separator) + rel
 }
 
-// markAgentsMD marks each top-level AGENTS.md as not loading. It does not
-// recurse into Imports: an import node is always constructed with
-// MemoryKindImport regardless of what file it targets, so it can never match
-// MemoryKindAgentsMD — an explicit @AGENTS.md import is read whatever the
-// mode, since the mode governs discovery, not an explicit request to include
-// a file.
+// markAgentsMD marks every AGENTS.md as not loading, for the modes that
+// refuse them all for the same reason.
 func markAgentsMD(files []agent.Memory, reason string) {
+	markAgentsMDBy(files, func(*agent.Memory) string { return reason })
+}
+
+// markAgentsMDBy marks each top-level AGENTS.md for which reasonFor returns a
+// non-empty reason, so a mode whose answer differs per entry — the default
+// one, which narrows further for on-demand entries — can express that.
+//
+// It only inspects top-level entries: an import node is always constructed
+// with MemoryKindImport regardless of what file it targets, so it can never
+// match MemoryKindAgentsMD — an explicit @AGENTS.md import is read whatever
+// the mode, since the mode governs discovery, not an explicit request to
+// include a file. The subtree of a refused AGENTS.md is a different matter:
+// the refusal cascades onto it, because content reached only through a file
+// Claude Code does not read never arrives either, and leaving it unmarked
+// would have annotateWarnings offer size advice about it.
+func markAgentsMDBy(files []agent.Memory, reasonFor func(*agent.Memory) string) {
 	for i := range files {
-		if files[i].Kind == agent.MemoryKindAgentsMD {
-			files[i].NotLoaded = true
-			files[i].Warnings = append(files[i].Warnings, reason)
+		if files[i].Kind != agent.MemoryKindAgentsMD {
+			continue
 		}
+		reason := reasonFor(&files[i])
+		if reason == "" {
+			continue
+		}
+		files[i].NotLoaded = true
+		files[i].Warnings = append(files[i].Warnings, reason)
+		markSubtreeNotLoaded(files[i].Imports, reason)
 	}
 }
 
 // markManagedOnly leaves the organization's managed CLAUDE.md and auto memory
-// loading and marks the rest of the launch tier. On-demand entries are
-// untouched: a subdirectory's CLAUDE.md still loads when Claude reads a file
-// there, even in this mode.
+// loading and marks the rest of the launch tier. An on-demand CLAUDE.md is
+// untouched: it still loads when Claude reads a file in that directory, even
+// in this mode. An on-demand AGENTS.md is not — the carve-out names only a
+// subdirectory's CLAUDE.md and its rules, and every AGENTS.md is left out
+// whatever its tier.
 func markManagedOnly(files []agent.Memory) {
 	reason := fmt.Sprintf("not read in %s mode", ModeManagedOnly)
 	for i := range files {
-		if files[i].Tier != agent.MemoryTierLaunch {
+		if files[i].Tier != agent.MemoryTierLaunch && files[i].Kind != agent.MemoryKindAgentsMD {
 			continue
 		}
 		if files[i].Scope == agent.ScopeManaged || files[i].Kind == agent.MemoryKindAutoIndex {
