@@ -118,6 +118,27 @@ The audit reflects Claude Code's documented resolution rules rather than
 instrumenting a running session; `/context` remains the ground truth for what
 one session actually loaded.
 
+Claude Code reads `AGENTS.md` as project instructions when your repository has
+no `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md` in the working
+directory or above it. `ccli memory` follows the same rule, reports an
+`AGENTS.md` a `CLAUDE.md` shadows so you can see it is doing nothing, and
+names the active mode under the totals:
+
+```
+  loaded at launch:  2 files · 113L · 4.1 KB
+  on demand:         0 files
+  instruction files: claude-md-or-agents-md
+```
+
+The mode comes from `instructionFiles` under the built-in `agents-md` plugin
+in your user or managed settings — Claude Code ignores it in project and local
+settings files. `claude-md-and-agents-md` loads both, `claude-md` ignores
+`AGENTS.md`, and `managed-only` loads just your organization's managed
+`CLAUDE.md` and auto memory — and also excludes `.claude/rules/`, which this
+audit warns about rather than enumerates; run `ccli rules` to see them.
+Reading `AGENTS.md` directly requires Claude Code v2.1.277 or later, and is
+not available on Bedrock, Vertex or Foundry.
+
 ### Projects
 
 ```bash
@@ -185,6 +206,7 @@ ccli reads Claude Code configuration files directly from disk:
 | `~/.claude/CLAUDE.md`                  | User memory instructions             |
 | `./CLAUDE.md`, `./.claude/CLAUDE.md`   | Project memory instructions          |
 | `./CLAUDE.local.md`                    | Local (gitignored) memory            |
+| `./AGENTS.md`, `./.claude/AGENTS.md`   | Project instructions if no CLAUDE.md |
 | Managed policy `CLAUDE.md`             | Organization-wide instructions       |
 | `~/.claude/projects/<project>/memory/` | Auto memory index and topic files    |
 | `~/.claude/projects/`                  | Project session data                 |
