@@ -15,7 +15,7 @@ Claude Code stores its configuration across many files and directories — globa
 - **See everything at a glance** — `ccli info` shows your full setup: version, auth, model, paths, session counts, and storage usage.
 - **Audit MCP servers** — List servers across all scopes, inspect their config, and verify environment variables without digging through JSON files.
 - **Discover skills and rules** — Find what's available across personal, project, and plugin sources in one place.
-- **Audit memory** — `ccli memory` shows which CLAUDE.md files and auto memory load into a session, in order, and what they cost in context.
+- **Audit memory** — `ccli memory` shows which `CLAUDE.md`/`AGENTS.md` files and auto memory load into a session, in order, and what they cost in context.
 - **Track project usage** — View per-project costs, token usage, and model breakdowns from session history.
 - **Clean up old sessions** — Delete old session data and associated artifacts (debug logs, telemetry, todos, tasks) across all or specific projects.
 - **Scriptable output** — Every command supports `--format json` and `--format yaml` for automation and piping.
@@ -96,16 +96,16 @@ ccli memory get user
 ccli memory get CLAUDE.local.md
 ```
 
-Shows managed policy, user, project, and local `CLAUDE.md` files, their
-`@path` imports nested underneath, and the auto memory index, in the order
-Claude Code concatenates them — with line and byte counts against the limits
-it documents. Warns about a `MEMORY.md` past its 200-line or 25KB load
-cutoff (either one drops the rest), a `CLAUDE.md` over 200 lines (which
-reduces adherence) or over 4 MiB (which Claude Code **skips entirely**),
-broken or too-deep imports, imports that need external approval, files
-shadowed by `claudeMdExcludes`, and auto memory disabled in settings, which
-means `MEMORY.md` does not load at all. Each warning is printed under the
-file it belongs to, and repeated in a summary at the end.
+Shows managed policy, user, project, and local `CLAUDE.md` files, any
+`AGENTS.md` in play, their `@path` imports nested underneath, and the auto
+memory index, in the order Claude Code concatenates them — with line and byte
+counts against the limits it documents. Warns about a `MEMORY.md` past its
+200-line or 25KB load cutoff (either one drops the rest), a `CLAUDE.md` over
+200 lines (which reduces adherence) or over 4 MiB (which Claude Code
+**skips entirely**), broken or too-deep imports, imports that need external
+approval, files shadowed by `claudeMdExcludes`, and auto memory disabled in
+settings, which means `MEMORY.md` does not load at all. Each warning is
+printed under the file it belongs to, and repeated in a summary at the end.
 
 The launch total counts only what actually loads, so a file Claude Code
 refuses — excluded, absent, past the four-hop import limit, a cycle, or auto
@@ -120,8 +120,18 @@ one session actually loaded.
 
 Claude Code reads `AGENTS.md` as project instructions when your repository has
 no `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md` in the working
-directory or above it. `ccli memory` follows the same rule, reports an
-`AGENTS.md` a `CLAUDE.md` shadows so you can see it is doing nothing, and
+directory or above it. Your personal `~/.claude/CLAUDE.md` and your
+organization's managed `CLAUDE.md` don't count toward that check — only a
+project-style `CLAUDE.md` in the working directory or an ancestor does,
+which includes a bare `$HOME/CLAUDE.md` if your repository lives under your
+home directory. `@path` imports and `claudeMdExcludes` apply to `AGENTS.md`
+exactly as they do to `CLAUDE.md`.
+
+In the launch tier, `ccli memory` follows the same rule and reports an
+`AGENTS.md` a `CLAUDE.md` shadows so you can see it is doing nothing. A
+subdirectory's `AGENTS.md`, which only appears under `--on-demand`, is
+handled differently: when its own directory also has a `CLAUDE.md`, it is
+left out of the listing entirely, with no row and no warning. The audit
 names the active mode under the totals:
 
 ```
@@ -135,9 +145,12 @@ in your user or managed settings — Claude Code ignores it in project and local
 settings files. `claude-md-and-agents-md` loads both, `claude-md` ignores
 `AGENTS.md`, and `managed-only` loads just your organization's managed
 `CLAUDE.md` and auto memory — and also excludes `.claude/rules/`, which this
-audit warns about rather than enumerates; run `ccli rules` to see them.
-Reading `AGENTS.md` directly requires Claude Code v2.1.277 or later, and is
-not available on Bedrock, Vertex or Foundry.
+audit warns about rather than enumerates; run `ccli rules` to see them. An
+unrecognized `instructionFiles` value falls back to the default silently: the
+totals show `claude-md-or-agents-md` with no indication that your configured
+value didn't match one of the four modes. Reading `AGENTS.md` directly
+requires Claude Code v2.1.277 or later, and is not available on Bedrock,
+Vertex or Foundry.
 
 ### Projects
 
