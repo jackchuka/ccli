@@ -62,6 +62,7 @@ type MemoryKind string
 const (
 	MemoryKindClaudeMD      MemoryKind = "claude-md"
 	MemoryKindClaudeLocalMD MemoryKind = "claude-local-md"
+	MemoryKindAgentsMD      MemoryKind = "agents-md"
 	MemoryKindManagedInline MemoryKind = "managed-inline"
 	MemoryKindImport        MemoryKind = "import"
 	MemoryKindAutoIndex     MemoryKind = "auto-index"

@@ -1516,3 +1516,126 @@ func TestMemoryReportRoundTripsJSONAndYAML(t *testing.T) {
 		})
 	}
 }
+
+// agentsFixture builds a tree whose working directory is repo/pkg/api.
+func agentsFixture(t *testing.T) (string, claudecode.Paths) {
+	t.Helper()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
+
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	claudeHome := filepath.Join(home, ".claude")
+	repo := filepath.Join(root, "repo")
+	api := filepath.Join(repo, "pkg", "api")
+	for _, d := range []string{claudeHome, filepath.Join(repo, ".claude"), filepath.Join(api, ".claude"), api} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root, claudecode.Paths{
+		SettingsFile: filepath.Join(claudeHome, "settings.json"),
+		HomeDir:      claudeHome,
+		UserHomeDir:  home,
+		CWD:          api,
+	}
+}
+
+// writeFixtureFile is a package-level helper; memory_test.go's existing
+// fixtures use local `write := func(...)` closures, so this name must not
+// collide with one of them.
+func writeFixtureFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLaunchTierDiscoversAgentsMD(t *testing.T) {
+	root, paths := agentsFixture(t)
+	repo := filepath.Join(root, "repo")
+
+	writeFixtureFile(t, filepath.Join(repo, "AGENTS.md"), "repo agents\n")
+	writeFixtureFile(t, filepath.Join(repo, ".claude", "AGENTS.md"), "repo dot agents\n")
+	writeFixtureFile(t, filepath.Join(paths.CWD, "AGENTS.md"), "api agents\n")
+	writeFixtureFile(t, filepath.Join(paths.CWD, ".claude", "AGENTS.md"), "api dot agents\n")
+
+	var got []string
+	for _, f := range claudecode.NewAgent(paths).LaunchTierFiles() {
+		if f.Kind == agent.MemoryKindAgentsMD && f.Exists {
+			got = append(got, f.Path)
+		}
+	}
+	if len(got) != 4 {
+		t.Fatalf("got %d AGENTS.md entries (%v), want 4", len(got), got)
+	}
+	// An ancestor's .claude/AGENTS.md loads, unlike an ancestor's
+	// .claude/CLAUDE.md, which is only read in the working directory.
+	if !strings.HasSuffix(got[1], filepath.Join("repo", ".claude", "AGENTS.md")) {
+		t.Errorf("ancestor .claude/AGENTS.md not discovered: %v", got)
+	}
+}
+
+func TestLaunchTierOrdersClaudeMDBeforeAgentsMD(t *testing.T) {
+	root, paths := agentsFixture(t)
+	repo := filepath.Join(root, "repo")
+
+	writeFixtureFile(t, filepath.Join(repo, "CLAUDE.md"), "repo claude\n")
+	writeFixtureFile(t, filepath.Join(repo, "AGENTS.md"), "repo agents\n")
+
+	claudeIdx, agentsIdx := -1, -1
+	for i, f := range claudecode.NewAgent(paths).LaunchTierFiles() {
+		if !f.Exists {
+			continue
+		}
+		if f.Kind == agent.MemoryKindClaudeMD && strings.HasSuffix(f.Path, filepath.Join("repo", "CLAUDE.md")) {
+			claudeIdx = i
+		}
+		if f.Kind == agent.MemoryKindAgentsMD && strings.HasSuffix(f.Path, filepath.Join("repo", "AGENTS.md")) {
+			agentsIdx = i
+		}
+	}
+	if claudeIdx < 0 || agentsIdx < 0 || claudeIdx > agentsIdx {
+		t.Errorf("a directory's CLAUDE.md must precede its AGENTS.md: %d vs %d", claudeIdx, agentsIdx)
+	}
+}
+
+func TestLaunchTierOmitsAbsentAgentsMD(t *testing.T) {
+	_, paths := agentsFixture(t)
+	for _, f := range claudecode.NewAgent(paths).LaunchTierFiles() {
+		if f.Kind == agent.MemoryKindAgentsMD {
+			t.Errorf("an absent AGENTS.md should not be reported: %+v", f)
+		}
+	}
+}
+
+func TestOnDemandAgentsMDRespectsPerDirectoryClaudeMD(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "")
+
+	// Below the working directory: one subdirectory with only AGENTS.md, one
+	// where a CLAUDE.md of its own wins, and the never-read names.
+	writeFixtureFile(t, filepath.Join(root, "plain", "AGENTS.md"), "plain\n")
+	writeFixtureFile(t, filepath.Join(root, "shadowed", "AGENTS.md"), "shadowed\n")
+	writeFixtureFile(t, filepath.Join(root, "shadowed", "CLAUDE.md"), "wins\n")
+	writeFixtureFile(t, filepath.Join(root, "never", "AGENTS.local.md"), "no\n")
+	writeFixtureFile(t, filepath.Join(root, "never", "AGENTS.override.md"), "no\n")
+	writeFixtureFile(t, filepath.Join(root, ".agents", "AGENTS.md"), "no\n")
+
+	var agentsPaths []string
+	for _, f := range claudecode.NewAgent(claudecode.Paths{CWD: root}).OnDemandSubdirFiles() {
+		if f.Kind == agent.MemoryKindAgentsMD {
+			agentsPaths = append(agentsPaths, f.Path)
+		}
+	}
+	if len(agentsPaths) != 1 {
+		t.Fatalf("got %v, want only plain/AGENTS.md", agentsPaths)
+	}
+	if !strings.HasSuffix(agentsPaths[0], filepath.Join("plain", "AGENTS.md")) {
+		t.Errorf("got %q", agentsPaths[0])
+	}
+}

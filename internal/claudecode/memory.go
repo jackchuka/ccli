@@ -111,6 +111,8 @@ func (a *Agent) launchTierFiles(s *MergedSettings) []agent.Memory {
 		files = append(files, existingOnly(
 			readMemoryFile(filepath.Join(dir, "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch),
 			readMemoryFile(filepath.Join(dir, "CLAUDE.local.md"), agent.ScopeLocal, agent.MemoryKindClaudeLocalMD, agent.MemoryTierLaunch),
+			readMemoryFile(filepath.Join(dir, "AGENTS.md"), agent.ScopeProject, agent.MemoryKindAgentsMD, agent.MemoryTierLaunch),
+			readMemoryFile(filepath.Join(dir, ".claude", "AGENTS.md"), agent.ScopeProject, agent.MemoryKindAgentsMD, agent.MemoryTierLaunch),
 		)...)
 	}
 
@@ -121,6 +123,15 @@ func (a *Agent) launchTierFiles(s *MergedSettings) []agent.Memory {
 			readMemoryFile(filepath.Join(a.paths.CWD, ".claude", "CLAUDE.md"), agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierLaunch),
 			readMemoryFile(filepath.Join(a.paths.CWD, "CLAUDE.local.md"), agent.ScopeLocal, agent.MemoryKindClaudeLocalMD, agent.MemoryTierLaunch),
 		)
+
+		// AGENTS.md entries are reported only when present. The three CLAUDE.md
+		// locations above are listed even when absent because /memory lists
+		// them; AGENTS.md has no such listing, and an absent row in every
+		// CLAUDE.md repository would be noise.
+		files = append(files, existingOnly(
+			readMemoryFile(filepath.Join(a.paths.CWD, "AGENTS.md"), agent.ScopeProject, agent.MemoryKindAgentsMD, agent.MemoryTierLaunch),
+			readMemoryFile(filepath.Join(a.paths.CWD, ".claude", "AGENTS.md"), agent.ScopeProject, agent.MemoryKindAgentsMD, agent.MemoryTierLaunch),
+		)...)
 	}
 
 	return files
@@ -406,6 +417,19 @@ var skippedWalkDirs = map[string]bool{
 	"vendor":       true,
 }
 
+// claudeMDIn returns the path of the first CLAUDE.md-family file in dir, or
+// "" when the directory has none. Claude Code treats any of the three as a
+// reason to read CLAUDE.md instead of AGENTS.md.
+func claudeMDIn(dir string) string {
+	for _, name := range []string{"CLAUDE.md", filepath.Join(".claude", "CLAUDE.md"), "CLAUDE.local.md"} {
+		p := filepath.Join(dir, name)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
 // onDemandSubdirFiles finds CLAUDE.md and CLAUDE.local.md below the working
 // directory. Claude Code loads these only when it reads files in those
 // directories, so they are reported separately from the launch tier.
@@ -434,6 +458,13 @@ func (a *Agent) onDemandSubdirFiles() []agent.Memory {
 			files = append(files, readMemoryFile(path, agent.ScopeProject, agent.MemoryKindClaudeMD, agent.MemoryTierOnDemand))
 		case "CLAUDE.local.md":
 			files = append(files, readMemoryFile(path, agent.ScopeLocal, agent.MemoryKindClaudeLocalMD, agent.MemoryTierOnDemand))
+		case "AGENTS.md":
+			// Per-directory test, not the global one: a subdirectory's own
+			// CLAUDE.md stops Claude Code reading its AGENTS.md.
+			if claudeMDIn(filepath.Dir(path)) != "" {
+				return nil
+			}
+			files = append(files, readMemoryFile(path, agent.ScopeProject, agent.MemoryKindAgentsMD, agent.MemoryTierOnDemand))
 		}
 		return nil
 	})
