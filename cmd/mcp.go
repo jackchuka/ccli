@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/jackchuka/ccli/internal/agent"
 	"github.com/jackchuka/ccli/internal/output"
@@ -24,6 +26,9 @@ var mcpListCmd = &cobra.Command{
 		servers, err := a.ListMCPServers()
 		if err != nil {
 			return err
+		}
+		for i := range servers {
+			maskEnv(&servers[i])
 		}
 		p, err := getPrinter()
 		if err != nil {
@@ -49,6 +54,7 @@ var mcpGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		maskEnv(server)
 		p, err := getPrinter()
 		if err != nil {
 			return err
@@ -92,11 +98,23 @@ func renderMCPGet(p *output.Printer, s *agent.MCPServer) error {
 	if len(s.Env) > 0 {
 		p.PrintText("")
 		p.PrintText(output.RenderDivider("Environment", noColor))
-		for k, v := range s.Env {
-			p.PrintText(fmt.Sprintf("  %-18s %s", k, output.MaskEnvValue(k, v)))
+		for _, k := range slices.Sorted(maps.Keys(s.Env)) {
+			p.PrintText(fmt.Sprintf("  %-18s %s", k, s.Env[k]))
 		}
 	}
 	return nil
+}
+
+// maskEnv masks secret env values in place so every output format hides them.
+func maskEnv(s *agent.MCPServer) {
+	if len(s.Env) == 0 {
+		return
+	}
+	masked := make(map[string]string, len(s.Env))
+	for k, v := range s.Env {
+		masked[k] = output.MaskEnvValue(k, v)
+	}
+	s.Env = masked
 }
 
 func init() {
