@@ -170,7 +170,8 @@ func countSessionFiles(projectsDir string) int {
 }
 
 // countSessionsInDir counts unique sessions in a project directory.
-// Sessions may exist as .jsonl files and/or directories sharing the same UUID.
+// A session is a <uuid>.jsonl transcript and/or a <uuid> directory; other
+// entries, such as the auto memory directory, are not sessions.
 func countSessionsInDir(dir string) int {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -178,10 +179,38 @@ func countSessionsInDir(dir string) int {
 	}
 	seen := map[string]bool{}
 	for _, e := range entries {
-		id := strings.TrimSuffix(e.Name(), ".jsonl")
-		seen[id] = true
+		id := e.Name()
+		if !e.IsDir() {
+			var ok bool
+			if id, ok = strings.CutSuffix(id, ".jsonl"); !ok {
+				continue
+			}
+		}
+		if isSessionID(id) {
+			seen[id] = true
+		}
 	}
 	return len(seen)
+}
+
+// isSessionID reports whether s has the 8-4-4-4-12 hex shape of a session UUID.
+func isSessionID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func dirSize(path string) int64 {

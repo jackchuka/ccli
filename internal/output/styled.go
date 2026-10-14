@@ -2,13 +2,14 @@ package output
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 )
 
 // Sensitive key patterns for masking.
-var sensitivePatterns = []string{"KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL", "URL"}
+var sensitivePatterns = []string{"KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD", "CREDENTIAL", "PRIVATE"}
 
 var (
 	dimColor    = lipgloss.Color("#666666")
@@ -87,11 +88,17 @@ func RenderScopeBullet(scope string, noColor bool) string {
 	return s.style.Render(s.bullet)
 }
 
-// MaskEnvValue masks sensitive environment variable values.
+// MaskEnvValue masks an environment variable value when its name suggests a
+// secret or the value is a URL carrying a password.
 func MaskEnvValue(key, value string) string {
 	upper := strings.ToUpper(key)
 	for _, pattern := range sensitivePatterns {
 		if strings.Contains(upper, pattern) {
+			return "••••••••"
+		}
+	}
+	if u, err := url.Parse(value); err == nil && u.User != nil {
+		if _, ok := u.User.Password(); ok {
 			return "••••••••"
 		}
 	}

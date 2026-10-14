@@ -57,7 +57,13 @@ func TestMaskEnvValue(t *testing.T) {
 		{"DATADOG_API_KEY", "secret123", "••••••••"},
 		{"DATADOG_SITE", "us5.datadoghq.com", "us5.datadoghq.com"},
 		{"SECRET_TOKEN", "abc", "••••••••"},
-		{"DATABASE_URL", "postgres://...", "••••••••"},
+		{"DATABASE_URL", "postgres://localhost:5432/app", "postgres://localhost:5432/app"},
+		{"API_BASE_URL", "https://api.example.com", "https://api.example.com"},
+		{"DATABASE_URL", "postgres://app:hunter2@db.example.com/app", "••••••••"},
+		{"PGPASSWORD", "hunter2", "••••••••"},
+		{"GITHUB_PERSONAL_ACCESS_TOKEN", "ghp_x", "••••••••"},
+		{"DB_PASSWD", "hunter2", "••••••••"},
+		{"SSH_PRIVATE", "-----BEGIN", "••••••••"},
 	}
 	for _, tt := range tests {
 		got := output.MaskEnvValue(tt.key, tt.val)

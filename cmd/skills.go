@@ -104,11 +104,11 @@ func renderSkillList(p *output.Printer, skills []agent.Skill) error {
 }
 
 func renderSkillGet(p *output.Printer, s *agent.Skill) error {
-	p.PrintText(fmt.Sprintf("  Name:        %s", s.Name))
-	p.PrintText(fmt.Sprintf("  Scope:       %s", s.Scope))
-	p.PrintText(fmt.Sprintf("  Path:        %s", s.Path))
+	p.PrintText(fmt.Sprintf("  Name         %s", s.Name))
+	p.PrintText(fmt.Sprintf("  Scope        %s", s.Scope))
+	p.PrintText(fmt.Sprintf("  Path         %s", s.Path))
 	if s.Description != "" {
-		p.PrintText(fmt.Sprintf("  Description: %s", s.Description))
+		p.PrintText(fmt.Sprintf("  Description  %s", s.Description))
 	}
 	return nil
 }
