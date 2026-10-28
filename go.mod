@@ -1,6 +1,6 @@
 module github.com/jackchuka/ccli
 
-go 1.26.5
+go 1.27.3
 
 require (
 	charm.land/lipgloss/v2 v2.0.6
